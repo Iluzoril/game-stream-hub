@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GameStream Hub - Играйте где угодно</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <header class="header">
+        <div class="container">
+            <div class="logo">
+                <h1>GameStream Hub</h1>
+            </div>
+            <nav class="nav">
+                <button id="loginBtn" class="btn-secondary">Войти</button>
+                <button id="registerBtn" class="btn-primary">Регистрация</button>
+            </nav>
+        </div>
+    </header>
+
+    <main>
+        <section class="hero">
+            <div class="container">
+                <div class="hero-content">
+                    <h1>Играйте в любые игры на любом устройстве</h1>
+                    <p>Запустите игру на своем мощном ПК, а играйте на ноутбуке, планшете или другом компьютере где угодно.</p>
+                    <div class="hero-buttons">
+                        <button id="hostBtn" class="btn-large btn-primary">Начать хостинг</button>
+                        <button id="clientBtn" class="btn-large btn-secondary">Подключиться к игре</button>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="how-it-works">
+            <div class="container">
+                <h2>Как это работает</h2>
+                <div class="steps">
+                    <div class="step">
+                        <div class="step-icon">🚀</div>
+                        <h3>Хост</h3>
+                        <p>Запустите игру на своем ПК и нажмите "Начать хостинг"</p>
+                    </div>
+                    <div class="step">
+                        <div class="step-icon">🔗</div>
+                        <h3>Клиент</h3>
+                        <p>Сообщите ID сессии другу или введите его для подключения</p>
+                    </div>
+                    <div class="step">
+                        <div class="step-icon">🎮</div>
+                        <h3>Играйте</h3>
+                        <p>Наслаждайтесь игрой с минимальной задержкой!</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer class="footer">
+        <div class="container">
+            <p>&copy; 2024 GameStream Hub. Курсовой проект.</p>
+        </div>
+    </footer>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        // Главная страница
+        document.addEventListener('DOMContentLoaded', function() {
+            const hostBtn = document.getElementById('hostBtn');
+            const clientBtn = document.getElementById('clientBtn');
+            const loginBtn = document.getElementById('loginBtn');
+            const registerBtn = document.getElementById('registerBtn');
+
+            hostBtn.addEventListener('click', () => {
+                window.location.href = '/host';
+            });
+
+            clientBtn.addEventListener('click', () => {
+                window.location.href = '/client';
+            });
+
+            loginBtn.addEventListener('click', () => {
+                alert('Функция входа будет реализована в будущем');
+            });
+
+            registerBtn.addEventListener('click', () => {
+                alert('Функция регистрации будет реализована в будущем');
+            });
+
+            // Проверка подключения к серверу
+            const socket = io();
+            socket.on('connect', () => {
+                console.log('Connected to server');
+            });
+        });
+    </script>
+</body>

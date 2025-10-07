@@ -1,0 +1,16 @@
+{
+  "name": "game-stream-host",
+  "version": "1.0.0",
+  "description": "Host application for game streaming",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder"
+  },
+  "devDependencies": {
+    "electron": "^22.0.0"
+  },
+  "dependencies": {
+    "socket.io-client": "^4.7.2"
+  }
+}

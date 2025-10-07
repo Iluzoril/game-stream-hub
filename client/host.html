@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Хостинг игры - GameStream Hub</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<style>
+
+.connection-info {
+    margin: 1.5rem 0;
+    padding: 1rem;
+    background: #f8f9fa;
+    border-radius: 10px;
+    border-left: 4px solid #4CAF50;
+}
+
+.connection-url {
+    display: flex;
+    gap: 1rem;
+    margin: 1rem 0;
+}
+
+.connection-url input {
+    flex: 1;
+    padding: 0.75rem;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    font-family: monospace;
+    background: white;
+}
+
+.connection-help {
+    color: #666;
+    font-size: 0.9rem;
+    margin: 0.5rem 0 0 0;
+}
+
+</style>
+<body>
+    <header class="header">
+        <div class="container">
+            <div class="logo">
+                <h1>GameStream Hub</h1>
+            </div>
+            <nav class="nav">
+                <a href="/" class="btn-secondary">Главная</a>
+            </nav>>
+        </div>
+    </header>
+
+    <main>
+        <div class="container">
+            <div class="host-dashboard">
+                <h2>Панель управления хостингом</h2>
+                
+                <div class="status-panel">
+                    <div class="status-indicator" id="statusIndicator">
+                        <span class="status-dot"></span>
+                        <span class="status-text">Ожидание подключения...</span>
+                    </div>
+                </div>
+
+                <div class="session-info">
+                    <h3>ID сессии:</h3>
+                    <div class="session-id" id="sessionId">-</div>
+                    <button id="copyBtn" class="btn-secondary">Копировать ID</button>
+                </div>
+
+                <div class="system-info">
+                    <h3>Информация о системе:</h3>
+                    <div class="info-grid">
+                        <div class="info-item">
+                            <label>Подключенные клиенты:</label>
+                            <span id="connectedClients">0/1</span>
+                        </div>
+                        <div class="info-item">
+                            <label>Статус потока:</label>
+                            <span id="streamStatus">Неактивен</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="video-preview">
+                    <h3>Предпросмотр:</h3>
+                    <video id="localVideo" autoplay muted playsinline></video>
+                </div>
+
+                <div class="controls">
+                    <button id="stopHostingBtn" class="btn-danger">Остановить хостинг</button>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="/js/host.js"></script>
+</body>
+</html>

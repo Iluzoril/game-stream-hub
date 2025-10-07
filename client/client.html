@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Подключение к игре - GameStream Hub</title>
+    <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+    <header class="header">
+        <div class="container">
+            <div class="logo">
+                <h1>GameStream Hub</h1>
+            </div>
+            <nav class="nav">
+                <a href="/" class="btn-secondary">Главная</a>
+            </nav>
+        </div>
+    </header>
+
+    <main>
+        <div class="container">
+            <div id="connectScreen" class="connect-screen">
+                <h2>Подключение к игре</h2>
+                <div class="connect-form">
+                    <input type="text" id="sessionIdInput" placeholder="Введите ID сессии (например: X7B9K2)" maxlength="8">
+                    <button id="connectBtn" class="btn-primary">Подключиться</button>
+                </div>
+                <div id="errorMessage" class="error-message"></div>
+            </div>
+
+            <div id="gameScreen" class="game-screen hidden">
+                <div class="game-header">
+                    <div class="game-info">
+                        <span>Задержка: <span id="latency">-</span> мс</span>
+                        <span>Статус: <span id="connectionStatus">Подключение...</span></span>
+                    </div>
+                    <button id="disconnectBtn" class="btn-danger">Отключиться</button>
+                </div>
+                
+                <div class="video-container">
+                    <video id="remoteVideo" autoplay playsinline></video>
+                    <div id="loadingMessage" class="loading-message">
+                        Подключение к игровому потоку...
+                    </div>
+                </div>
+
+                <div class="controls-info">
+                    <p>Управление: Используйте клавиатуру и мышь для игры</p>
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="/js/client.js"></script>
+</body>
+</html>
