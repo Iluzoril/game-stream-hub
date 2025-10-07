@@ -2,18 +2,30 @@ class ClientController {
     constructor() {
         this.socket = io();
         this.peerConnection = null;
+        
+        // УЛУЧШЕННАЯ конфигурация WebRTC
         this.configuration = {
             iceServers: [
                 { urls: 'stun:stun.l.google.com:19302' },
-                { urls: 'stun:stun1.l.google.com:19302' }
-            ]
+                { urls: 'stun:stun1.l.google.com:19302' },
+                { urls: 'stun:stun2.l.google.com:19302' },
+                {
+                    urls: 'turn:openrelay.metered.ca:80',
+                    username: 'openrelayproject',
+                    credential: 'openrelayproject'
+                },
+                {
+                    urls: 'turn:openrelay.metered.ca:443',
+                    username: 'openrelayproject',
+                    credential: 'openrelayproject'
+                }
+            ],
+            iceTransportPolicy: 'all',
+            bundlePolicy: 'max-bundle',
+            rtcpMuxPolicy: 'require'
         };
 
-        this.isConnected = false;
-        this.latencyInterval = null;
-
         this.initializeElements();
-        this.initializeEventListeners();
         this.initializeSocketListeners();
     }
 
@@ -24,67 +36,44 @@ class ClientController {
         this.connectBtn = document.getElementById('connectBtn');
         this.errorMessage = document.getElementById('errorMessage');
         this.remoteVideo = document.getElementById('remoteVideo');
-        this.latencyElement = document.getElementById('latency');
         this.connectionStatusElement = document.getElementById('connectionStatus');
         this.disconnectBtn = document.getElementById('disconnectBtn');
         this.loadingMessage = document.getElementById('loadingMessage');
-    }
 
-    initializeEventListeners() {
         this.connectBtn.addEventListener('click', () => this.connectToSession());
         this.disconnectBtn.addEventListener('click', () => this.disconnect());
         
         this.sessionIdInput.addEventListener('keypress', (e) => {
             if (e.key === 'Enter') this.connectToSession();
         });
-
-        this.sessionIdInput.addEventListener('input', (e) => {
-            e.target.value = e.target.value.toUpperCase();
-            this.hideError();
-        });
     }
 
     initializeSocketListeners() {
         this.socket.on('connect', () => {
-            console.log('✅ Connected to server');
-            this.updateConnectionStatus('Connected to server');
+            this.updateStatus('Connected to server');
         });
 
-        this.socket.on('session-joined', (data) => {
-            console.log('✅ Joined session:', data.sessionId);
-            this.updateConnectionStatus('Connecting to host...');
+        this.socket.on('session-joined', () => {
             this.showGameScreen();
+            this.updateStatus('Waiting for video stream...');
         });
 
         this.socket.on('session-error', (data) => {
-            console.error('❌ Session error:', data.message);
             this.showError(data.message);
-            this.updateConnectionStatus('Connection failed');
         });
 
-        this.socket.on('session-ended', (data) => {
-            alert('Session ended: ' + data.reason);
-            this.disconnect();
+        this.socket.on('webrtc-offer', async (offer) => {
+            await this.handleOffer(offer);
         });
 
-        this.socket.on('webrtc-offer', async (data) => {
-            console.log('📨 Received offer from host');
-            await this.handleOffer(data.offer);
+        this.socket.on('webrtc-answer', async (answer) => {
+            if (this.peerConnection) {
+                await this.peerConnection.setRemoteDescription(answer);
+            }
         });
 
-        this.socket.on('webrtc-answer', async (data) => {
-            console.log('📨 Received answer from host');
-            await this.handleAnswer(data.answer);
-        });
-
-        this.socket.on('ice-candidate', (data) => {
-            console.log('❄️ Received ICE candidate from host');
-            this.handleIceCandidate(data.candidate);
-        });
-
-        // Измерение задержки
-        this.socket.on('ping', (timestamp) => {
-            this.socket.emit('pong', timestamp);
+        this.socket.on('ice-candidate', (candidate) => {
+            this.handleIceCandidate(candidate);
         });
     }
 
@@ -97,19 +86,15 @@ class ClientController {
         }
 
         this.hideError();
-        this.updateConnectionStatus('Connecting to session...');
         this.connectBtn.disabled = true;
         this.connectBtn.textContent = 'Connecting...';
+        this.updateStatus('Connecting to session...');
 
-        console.log('🔗 Connecting to session:', sessionId);
         this.socket.emit('join-session', sessionId);
         
-        // Таймаут
         setTimeout(() => {
-            if (!this.isConnected && this.connectBtn.disabled) {
+            if (this.connectBtn.disabled) {
                 this.showError('Connection timeout');
-                this.connectBtn.disabled = false;
-                this.connectBtn.textContent = 'Connect';
             }
         }, 10000);
     }
@@ -117,74 +102,55 @@ class ClientController {
     showGameScreen() {
         this.connectScreen.classList.add('hidden');
         this.gameScreen.classList.remove('hidden');
-        this.startLatencyMeasurement();
     }
 
     showConnectScreen() {
         this.gameScreen.classList.add('hidden');
         this.connectScreen.classList.remove('hidden');
-        this.stopLatencyMeasurement();
+        this.connectBtn.disabled = false;
+        this.connectBtn.textContent = 'Connect';
     }
 
     showError(message) {
         this.errorMessage.textContent = message;
         this.errorMessage.style.display = 'block';
-        this.connectBtn.disabled = false;
-        this.connectBtn.textContent = 'Connect';
     }
 
     hideError() {
         this.errorMessage.style.display = 'none';
     }
 
-    updateConnectionStatus(status) {
+    updateStatus(status) {
         if (this.connectionStatusElement) {
             this.connectionStatusElement.textContent = status;
         }
     }
 
-    updateLatency(latency) {
-        if (this.latencyElement) {
-            this.latencyElement.textContent = latency;
-        }
-    }
-
-    startLatencyMeasurement() {
-        this.latencyInterval = setInterval(() => {
-            const startTime = Date.now();
-            this.socket.emit('ping', startTime);
-        }, 2000);
-
-        this.socket.on('pong', (startTime) => {
-            const latency = Date.now() - startTime;
-            this.updateLatency(latency);
-        });
-    }
-
-    stopLatencyMeasurement() {
-        if (this.latencyInterval) {
-            clearInterval(this.latencyInterval);
-            this.latencyInterval = null;
-        }
-    }
-
     async handleOffer(offer) {
         try {
-            console.log('🔗 Handling WebRTC offer');
+            console.log('📨 Received WebRTC offer');
             
             this.peerConnection = new RTCPeerConnection(this.configuration);
 
-            // Получаем видео поток
+            // ВАЖНО: Обработчик входящего видеопотока
             this.peerConnection.ontrack = (event) => {
-                console.log('🎬 Received video stream');
+                console.log('🎬 Received track event:', event);
+                
                 if (event.streams && event.streams[0]) {
-                    this.remoteVideo.srcObject = event.streams[0];
-                    this.loadingMessage.style.display = 'none';
-                    this.isConnected = true;
-                    this.updateConnectionStatus('Connected!');
+                    const stream = event.streams[0];
+                    console.log('📹 Stream received with tracks:', stream.getTracks().length);
                     
-                    this.remoteVideo.play().catch(err => {
-                        console.log('⚠️ Video play error:', err);
+                    this.remoteVideo.srcObject = stream;
+                    this.loadingMessage.style.display = 'none';
+                    this.updateStatus('Connected! Video streaming...');
+                    
+                    // Автовоспроизведение с обработкой ошибок
+                    this.remoteVideo.play().then(() => {
+                        console.log('✅ Video playback started');
+                    }).catch(error => {
+                        console.log('⚠️ Video play error:', error);
+                        // Показываем кнопку для ручного запуска
+                        this.remoteVideo.controls = true;
                     });
                 }
             };
@@ -199,9 +165,23 @@ class ClientController {
                 }
             };
 
-            // Отслеживание состояния соединения
+            // Отслеживание состояния
             this.peerConnection.onconnectionstatechange = () => {
                 console.log('🔗 WebRTC state:', this.peerConnection.connectionState);
+                switch(this.peerConnection.connectionState) {
+                    case 'connected':
+                        this.updateStatus('Video connected!');
+                        break;
+                    case 'disconnected':
+                    case 'failed':
+                        this.updateStatus('Connection lost');
+                        this.showError('Video connection lost');
+                        break;
+                }
+            };
+
+            this.peerConnection.oniceconnectionstatechange = () => {
+                console.log('❄️ ICE state:', this.peerConnection.iceConnectionState);
             };
 
             // Устанавливаем offer и создаем answer
@@ -214,21 +194,11 @@ class ClientController {
                 answer: answer
             });
 
-            console.log('✅ WebRTC connection established');
+            console.log('✅ WebRTC negotiation completed');
 
         } catch (error) {
-            console.error('❌ Error handling offer:', error);
+            console.error('❌ WebRTC error:', error);
             this.showError('Connection failed: ' + error.message);
-        }
-    }
-
-    async handleAnswer(answer) {
-        try {
-            if (this.peerConnection) {
-                await this.peerConnection.setRemoteDescription(answer);
-            }
-        } catch (error) {
-            console.error('❌ Error handling answer:', error);
         }
     }
 
@@ -238,29 +208,21 @@ class ClientController {
                 this.peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
             }
         } catch (error) {
-            console.error('❌ Error adding ICE candidate:', error);
+            console.error('❌ ICE candidate error:', error);
         }
     }
 
     disconnect() {
-        console.log('🔌 Disconnecting...');
-        this.isConnected = false;
-        
         if (this.peerConnection) {
             this.peerConnection.close();
-            this.peerConnection = null;
         }
-
         if (this.remoteVideo.srcObject) {
             this.remoteVideo.srcObject = null;
         }
-
-        this.stopLatencyMeasurement();
         this.showConnectScreen();
     }
 }
 
-// Инициализация
 document.addEventListener('DOMContentLoaded', () => {
     new ClientController();
 });
