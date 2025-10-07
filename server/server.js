@@ -10,8 +10,7 @@ const io = socketIo(server, {
   cors: {
     origin: "*",
     methods: ["GET", "POST"]
-  },
-  transports: ['websocket', 'polling']
+  }
 });
 
 app.use(cors());
@@ -51,15 +50,14 @@ io.on('connection', (socket) => {
     const sessionId = generateSessionId();
     sessions.set(sessionId, {
       hostId: socket.id,
-      clients: new Set()
+      clients: new Map() // Используем Map вместо Set для хранения данных клиентов
     });
 
     socket.join(sessionId);
     socket.emit('session-created', { 
-      sessionId,
-      connectionUrl: `http://localhost:3000/client`
+      sessionId
     });
-    console.log('🎮 Session created:', sessionId);
+    console.log('🎮 Session created:', sessionId, 'by', socket.id);
   });
 
   // Подключение клиента
@@ -71,31 +69,54 @@ io.on('connection', (socket) => {
       return;
     }
 
-    session.clients.add(socket.id);
-    socket.join(sessionId);
-    socket.emit('session-joined', { sessionId });
-    
-    // Уведомляем хост
-    socket.to(session.hostId).emit('client-connected', { 
-      clientId: socket.id
+    // Сохраняем клиента с дополнительной информацией
+    session.clients.set(socket.id, {
+      id: socket.id,
+      connectedAt: new Date()
     });
 
-    console.log('👥 Client joined:', socket.id, 'to session:', sessionId);
+    socket.join(sessionId);
+    socket.emit('session-joined', { 
+      sessionId,
+      hostId: session.hostId
+    });
+    
+    // Уведомляем хост о новом клиенте
+    socket.to(session.hostId).emit('client-connected', { 
+      clientId: socket.id,
+      totalClients: session.clients.size
+    });
+
+    console.log('👥 Client joined:', socket.id, 'to session:', sessionId, 'Total clients:', session.clients.size);
   });
 
-  // WebRTC signaling - ПРОСТАЯ версия
+  // WebRTC signaling
   socket.on('webrtc-offer', (data) => {
-    console.log('📨 Forwarding offer to:', data.target);
-    socket.to(data.target).emit('webrtc-offer', data.offer);
+    console.log('📨 Forwarding offer from', socket.id, 'to', data.target);
+    socket.to(data.target).emit('webrtc-offer', {
+      offer: data.offer,
+      sender: socket.id
+    });
   });
 
   socket.on('webrtc-answer', (data) => {
-    console.log('📨 Forwarding answer to:', data.target);
-    socket.to(data.target).emit('webrtc-answer', data.answer);
+    console.log('📨 Forwarding answer from', socket.id, 'to', data.target);
+    socket.to(data.target).emit('webrtc-answer', {
+      answer: data.answer,
+      sender: socket.id
+    });
   });
 
   socket.on('ice-candidate', (data) => {
-    socket.to(data.target).emit('ice-candidate', data.candidate);
+    socket.to(data.target).emit('ice-candidate', {
+      candidate: data.candidate,
+      sender: socket.id
+    });
+  });
+
+  // Пинг-понг для задержки
+  socket.on('ping', (timestamp) => {
+    socket.emit('pong', timestamp);
   });
 
   // Отслеживание отключений
@@ -104,9 +125,21 @@ io.on('connection', (socket) => {
     
     for (const [sessionId, session] of sessions.entries()) {
       if (session.hostId === socket.id) {
+        // Хост отключился - уведомляем всех клиентов
+        io.to(sessionId).emit('session-ended', { reason: 'Host disconnected' });
         sessions.delete(sessionId);
         console.log('🗑️ Session deleted:', sessionId);
         break;
+      }
+      
+      if (session.clients.has(socket.id)) {
+        // Клиент отключился
+        session.clients.delete(socket.id);
+        socket.to(session.hostId).emit('client-disconnected', {
+          clientId: socket.id,
+          totalClients: session.clients.size
+        });
+        console.log('👋 Client removed:', socket.id, 'from session:', sessionId);
       }
     }
   });
@@ -119,7 +152,7 @@ function generateSessionId() {
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
   console.log('=================================');
-  console.log('🚀 Server running on port', PORT);
+  console.log('🚀 GameStream Hub Server Started');
   console.log('📍 http://localhost:' + PORT);
   console.log('=================================');
 });
