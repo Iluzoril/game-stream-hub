@@ -551,3 +551,48 @@ body {
         text-align: center;
     }
 }
+
+/* Стили для видео и сообщений */
+.video-container {
+    position: relative;
+    background: #000;
+    border-radius: 10px;
+    overflow: hidden;
+    margin: 1rem 0;
+}
+
+.video-container video {
+    width: 100%;
+    height: auto;
+    background: #000;
+}
+
+.loading-message {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    color: white;
+    background: rgba(0,0,0,0.7);
+    padding: 1rem 2rem;
+    border-radius: 8px;
+    text-align: center;
+}
+
+.loading-message:hover {
+    background: rgba(0,0,0,0.9);
+}
+
+/* Статус индикаторы */
+.status-dot.connected { background: #4CAF50; }
+.status-dot.waiting { 
+    background: #FF9800; 
+    animation: pulse 1.5s infinite;
+}
+.status-dot.error { background: #f44336; }
+
+@keyframes pulse {
+    0% { opacity: 1; }
+    50% { opacity: 0.5; }
+    100% { opacity: 1; }
+}
