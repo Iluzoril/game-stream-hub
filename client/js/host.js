@@ -3,16 +3,17 @@ class HostController {
         this.socket = io();
         this.sessionId = null;
         this.localStream = null;
-        this.peerConnection = null;
+        this.peerConnections = new Map();
         
-        // ПРОСТАЯ конфигурация WebRTC
         this.configuration = {
             iceServers: [
-                { urls: 'stun:stun.l.google.com:19302' }
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' }
             ]
         };
 
         this.initializeElements();
+        this.initializeEventListeners();
         this.initializeSocketListeners();
         this.startHosting();
     }
@@ -20,43 +21,58 @@ class HostController {
     initializeElements() {
         this.statusIndicator = document.getElementById('statusIndicator');
         this.statusText = this.statusIndicator.querySelector('.status-text');
+        this.statusDot = this.statusIndicator.querySelector('.status-dot');
         this.sessionIdElement = document.getElementById('sessionId');
         this.connectedClientsElement = document.getElementById('connectedClients');
+        this.streamStatusElement = document.getElementById('streamStatus');
         this.localVideo = document.getElementById('localVideo');
         this.copyBtn = document.getElementById('copyBtn');
         this.stopHostingBtn = document.getElementById('stopHostingBtn');
-        
-        this.stopHostingBtn.addEventListener('click', () => this.stopHosting());
+    }
+
+    initializeEventListeners() {
         this.copyBtn.addEventListener('click', () => this.copySessionId());
+        this.stopHostingBtn.addEventListener('click', () => this.stopHosting());
     }
 
     initializeSocketListeners() {
         this.socket.on('connect', () => {
-            this.updateStatus('Connected to server', 'connected');
+            console.log('✅ Connected to server');
+            this.updateStatus('Connected to server', 'waiting');
         });
 
         this.socket.on('session-created', (data) => {
             this.sessionId = data.sessionId;
             this.sessionIdElement.textContent = this.sessionId;
             this.updateStatus('Waiting for client...', 'waiting');
+            this.updateConnectedClients(0);
         });
 
         this.socket.on('client-connected', (data) => {
-            this.updateStatus('Client connected!', 'connected');
-            this.connectedClientsElement.textContent = '1/1';
+            console.log('✅ Client connected:', data.clientId);
+            this.updateConnectedClients(data.totalClients);
+            this.updateStatus('Client connected! Creating connection...', 'connected');
             this.createPeerConnection(data.clientId);
         });
 
-        this.socket.on('webrtc-answer', async (answer) => {
-            if (this.peerConnection) {
-                await this.peerConnection.setRemoteDescription(answer);
+        this.socket.on('client-disconnected', (data) => {
+            console.log('❌ Client disconnected');
+            this.updateConnectedClients(data.totalClients);
+            this.peerConnections.delete(data.clientId);
+            
+            if (data.totalClients === 0) {
+                this.updateStatus('Waiting for client...', 'waiting');
             }
         });
 
-        this.socket.on('ice-candidate', (candidate) => {
-            if (this.peerConnection && candidate) {
-                this.peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
-            }
+        this.socket.on('webrtc-answer', async (data) => {
+            console.log('📨 Received answer from client');
+            await this.handleAnswer(data.sender, data.answer);
+        });
+
+        this.socket.on('ice-candidate', (data) => {
+            console.log('❄️ Received ICE candidate from client');
+            this.handleIceCandidate(data.sender, data.candidate);
         });
     }
 
@@ -66,36 +82,53 @@ class HostController {
             
             // Захват экрана
             this.localStream = await navigator.mediaDevices.getDisplayMedia({
-                video: true,
+                video: {
+                    cursor: 'always',
+                    frameRate: 30
+                },
                 audio: true
             });
 
+            console.log('🎥 Screen capture started');
+
+            // Обработчик остановки трансляции
+            this.localStream.getTracks().forEach(track => {
+                track.onended = () => {
+                    console.log('🛑 Screen sharing stopped by user');
+                    this.stopHosting();
+                };
+            });
+
             this.localVideo.srcObject = this.localStream;
+            this.streamStatusElement.textContent = 'Active';
             
             // Создание сессии
-            this.socket.emit('create-session', {});
-            this.updateStatus('Screen sharing started', 'connected');
+            this.socket.emit('create-session', {
+                game: 'Desktop Stream'
+            });
+
+            this.updateStatus('Screen sharing active', 'connected');
 
         } catch (error) {
-            console.error('Error:', error);
+            console.error('❌ Error starting hosting:', error);
             this.updateStatus('Failed to start sharing', 'error');
-            alert('Failed to start screen sharing: ' + error.message);
+            alert('Error: ' + error.message);
         }
     }
 
     async createPeerConnection(clientId) {
         try {
-            console.log('Creating peer connection for:', clientId);
+            console.log('🔗 Creating peer connection for client:', clientId);
             
-            this.peerConnection = new RTCPeerConnection(this.configuration);
+            const peerConnection = new RTCPeerConnection(this.configuration);
 
-            // Добавляем треки
+            // Добавляем треки из локального стрима
             this.localStream.getTracks().forEach(track => {
-                this.peerConnection.addTrack(track, this.localStream);
+                peerConnection.addTrack(track, this.localStream);
             });
 
-            // ICE кандидаты
-            this.peerConnection.onicecandidate = (event) => {
+            // Обработка ICE кандидатов
+            peerConnection.onicecandidate = (event) => {
                 if (event.candidate) {
                     this.socket.emit('ice-candidate', {
                         target: clientId,
@@ -104,48 +137,92 @@ class HostController {
                 }
             };
 
-            // Создаем offer
-            const offer = await this.peerConnection.createOffer();
-            await this.peerConnection.setLocalDescription(offer);
+            peerConnection.onconnectionstatechange = () => {
+                console.log('🔗 Connection state:', peerConnection.connectionState);
+                if (peerConnection.connectionState === 'connected') {
+                    this.updateStatus('Streaming to client!', 'connected');
+                }
+            };
+
+            // Создание offer
+            const offer = await peerConnection.createOffer();
+            await peerConnection.setLocalDescription(offer);
 
             this.socket.emit('webrtc-offer', {
                 target: clientId,
                 offer: offer
             });
 
-            console.log('Offer sent to client');
+            this.peerConnections.set(clientId, peerConnection);
+            console.log('✅ Peer connection created and offer sent');
 
         } catch (error) {
-            console.error('Peer connection error:', error);
+            console.error('❌ Error creating peer connection:', error);
             this.updateStatus('Connection error', 'error');
+        }
+    }
+
+    async handleAnswer(clientId, answer) {
+        try {
+            const peerConnection = this.peerConnections.get(clientId);
+            if (peerConnection) {
+                await peerConnection.setRemoteDescription(answer);
+                console.log('✅ Answer processed for client:', clientId);
+            }
+        } catch (error) {
+            console.error('❌ Error handling answer:', error);
+        }
+    }
+
+    handleIceCandidate(clientId, candidate) {
+        try {
+            const peerConnection = this.peerConnections.get(clientId);
+            if (peerConnection && candidate) {
+                peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+            }
+        } catch (error) {
+            console.error('❌ Error adding ICE candidate:', error);
         }
     }
 
     updateStatus(text, status) {
         this.statusText.textContent = text;
-        const dot = this.statusIndicator.querySelector('.status-dot');
-        dot.className = 'status-dot ' + status;
+        this.statusDot.className = 'status-dot';
+        if (status === 'connected') {
+            this.statusDot.classList.add('connected');
+        } else if (status === 'waiting') {
+            this.statusDot.classList.add('waiting');
+        } else if (status === 'error') {
+            this.statusDot.classList.add('error');
+        }
+    }
+
+    updateConnectedClients(count) {
+        this.connectedClientsElement.textContent = `${count}/5`;
     }
 
     copySessionId() {
         if (this.sessionId) {
             navigator.clipboard.writeText(this.sessionId);
-            alert('Session ID copied!');
+            alert('Session ID copied to clipboard!');
         }
     }
 
     stopHosting() {
+        console.log('🛑 Stopping hosting...');
+        
         if (this.localStream) {
             this.localStream.getTracks().forEach(track => track.stop());
         }
-        if (this.peerConnection) {
-            this.peerConnection.close();
-        }
+
+        this.peerConnections.forEach(pc => pc.close());
+        this.peerConnections.clear();
+
         window.location.href = '/';
     }
 }
 
-// Запуск
+// Инициализация
 document.addEventListener('DOMContentLoaded', () => {
     new HostController();
 });
