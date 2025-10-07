@@ -1,25 +1,36 @@
 class HostController {
     constructor() {
-        // Подключаемся к серверу на Render
-        this.socket = io({
-            transports: ['websocket', 'polling']
-        });
-        
+        this.socket = io();
         this.sessionId = null;
         this.localStream = null;
-        this.peerConnections = new Map();
+        this.peerConnection = null;
         
+        // УЛУЧШЕННАЯ конфигурация WebRTC
         this.configuration = {
             iceServers: [
                 { urls: 'stun:stun.l.google.com:19302' },
                 { urls: 'stun:stun1.l.google.com:19302' },
-                { urls: 'stun:stun2.l.google.com:19302' }
-            ]
+                { urls: 'stun:stun2.l.google.com:19302' },
+                // Бесплатные TURN серверы для обхода NAT
+                {
+                    urls: 'turn:openrelay.metered.ca:80',
+                    username: 'openrelayproject',
+                    credential: 'openrelayproject'
+                },
+                {
+                    urls: 'turn:openrelay.metered.ca:443',
+                    username: 'openrelayproject',
+                    credential: 'openrelayproject'
+                }
+            ],
+            iceTransportPolicy: 'all',
+            bundlePolicy: 'max-bundle',
+            rtcpMuxPolicy: 'require'
         };
 
         this.initializeElements();
-        this.initializeEventListeners();
         this.initializeSocketListeners();
+        this.startHosting();
     }
 
     initializeElements() {
@@ -28,87 +39,37 @@ class HostController {
         this.statusDot = this.statusIndicator.querySelector('.status-dot');
         this.sessionIdElement = document.getElementById('sessionId');
         this.connectedClientsElement = document.getElementById('connectedClients');
-        this.streamStatusElement = document.getElementById('streamStatus');
         this.localVideo = document.getElementById('localVideo');
         this.copyBtn = document.getElementById('copyBtn');
         this.stopHostingBtn = document.getElementById('stopHostingBtn');
         
-        // Создаем контейнер для ссылки
-        this.createConnectionInfo();
-    }
-
-    createConnectionInfo() {
-        const sessionInfo = document.querySelector('.session-info');
-        const connectionDiv = document.createElement('div');
-        connectionDiv.className = 'connection-info';
-        connectionDiv.innerHTML = `
-            <h3>Информация для подключения:</h3>
-            <div class="connection-url">
-                <strong>ID сессии: </strong><span id="sessionIdDisplay">-</span>
-            </div>
-            <div class="connection-url">
-                <strong>Ссылка для клиента: </strong>
-                <span>https://game-stream-hub.onrender.com/client</span>
-            </div>
-            <p class="connection-help">
-                Откройте ссылку на другом устройстве и введите ID сессии
-            </p>
-        `;
-        sessionInfo.appendChild(connectionDiv);
-        
-        this.sessionIdDisplay = document.getElementById('sessionIdDisplay');
-    }
-
-    initializeEventListeners() {
         this.copyBtn.addEventListener('click', () => this.copySessionId());
         this.stopHostingBtn.addEventListener('click', () => this.stopHosting());
     }
 
     initializeSocketListeners() {
         this.socket.on('connect', () => {
-            console.log('✅ Connected to Render server');
             this.updateStatus('Connected to server', 'waiting');
         });
 
         this.socket.on('session-created', (data) => {
             this.sessionId = data.sessionId;
             this.sessionIdElement.textContent = this.sessionId;
-            this.sessionIdDisplay.textContent = this.sessionId;
             this.updateStatus('Waiting for client...', 'waiting');
-            this.updateConnectedClients(0);
-            console.log('✅ Session created with ID:', this.sessionId);
         });
 
         this.socket.on('client-connected', (data) => {
-            console.log('✅ Client connected:', data.clientId);
-            this.updateConnectedClients(data.totalClients);
-            this.updateStatus('Client connected! Starting stream...', 'connected');
+            this.updateStatus('Client connected!', 'connected');
+            this.connectedClientsElement.textContent = '1/1';
             this.createPeerConnection(data.clientId);
         });
 
-        this.socket.on('client-disconnected', (data) => {
-            console.log('❌ Client disconnected');
-            this.updateConnectedClients(data.totalClients);
-            this.peerConnections.delete(data.clientId);
-            
-            if (data.totalClients === 0) {
-                this.updateStatus('Waiting for client...', 'waiting');
-            }
+        this.socket.on('webrtc-answer', async (answer) => {
+            await this.handleAnswer(answer);
         });
 
-        this.socket.on('webrtc-answer', async (data) => {
-            console.log('📨 Received WebRTC answer');
-            await this.handleAnswer(data.sender, data.answer);
-        });
-
-        this.socket.on('ice-candidate', (data) => {
-            console.log('❄️ Received ICE candidate');
-            this.handleIceCandidate(data.sender, data.candidate);
-        });
-
-        this.socket.on('session-ended', (data) => {
-            alert('Session ended: ' + data.reason);
-            this.stopHosting();
+        this.socket.on('ice-candidate', (candidate) => {
+            this.handleIceCandidate(candidate);
         });
     }
 
@@ -116,34 +77,38 @@ class HostController {
         try {
             this.updateStatus('Requesting screen access...', 'waiting');
             
-            // Захват экрана с базовыми настройками
+            // ЗАХВАТ ЭКРАНА с улучшенными настройками
             this.localStream = await navigator.mediaDevices.getDisplayMedia({
                 video: {
                     cursor: 'always',
-                    frameRate: 30
+                    displaySurface: 'monitor',
+                    frameRate: { ideal: 30, max: 60 },
+                    width: { ideal: 1280 },
+                    height: { ideal: 720 }
                 },
-                audio: true
+                audio: {
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                    sampleRate: 44100
+                }
             });
 
-            console.log('🎥 Screen capture started');
+            console.log('🎥 Screen capture started. Tracks:', this.localStream.getTracks().length);
 
-            // Обработчик остановки трансляции
-            this.localStream.getTracks().forEach(track => {
-                track.onended = () => {
-                    console.log('🛑 Screen sharing stopped');
-                    this.stopHosting();
-                };
-            });
-
+            // Показываем локальное видео
             this.localVideo.srcObject = this.localStream;
-            this.streamStatusElement.textContent = 'Active';
             
-            // Создаем сессию на сервере
+            // Обработчик остановки
+            this.localStream.getVideoTracks()[0].addEventListener('ended', () => {
+                this.stopHosting();
+            });
+
+            // Создаем сессию
             this.socket.emit('create-session', {});
             this.updateStatus('Screen sharing active', 'connected');
 
         } catch (error) {
-            console.error('❌ Error starting hosting:', error);
+            console.error('❌ Screen capture error:', error);
             this.updateStatus('Failed to start sharing', 'error');
             alert('Error: ' + error.message);
         }
@@ -151,18 +116,20 @@ class HostController {
 
     async createPeerConnection(clientId) {
         try {
-            console.log('🔗 Creating peer connection for:', clientId);
+            console.log('🔗 Creating peer connection for client:', clientId);
             
-            const peerConnection = new RTCPeerConnection(this.configuration);
+            this.peerConnection = new RTCPeerConnection(this.configuration);
 
-            // Добавляем треки
+            // ВАЖНО: Добавляем все треки в соединение
             this.localStream.getTracks().forEach(track => {
-                peerConnection.addTrack(track, this.localStream);
+                console.log('➕ Adding track:', track.kind, track);
+                this.peerConnection.addTrack(track, this.localStream);
             });
 
-            // ICE кандидаты
-            peerConnection.onicecandidate = (event) => {
+            // Обработчик ICE кандидатов
+            this.peerConnection.onicecandidate = (event) => {
                 if (event.candidate) {
+                    console.log('❄️ Sending ICE candidate');
                     this.socket.emit('ice-candidate', {
                         target: clientId,
                         candidate: event.candidate
@@ -170,51 +137,60 @@ class HostController {
                 }
             };
 
-            // Отслеживание состояния
-            peerConnection.onconnectionstatechange = () => {
-                console.log('🔗 Connection state:', peerConnection.connectionState);
-                if (peerConnection.connectionState === 'connected') {
-                    this.updateStatus('Streaming to client!', 'connected');
-                } else if (peerConnection.connectionState === 'failed') {
-                    this.updateStatus('Connection failed', 'error');
+            // Отслеживание состояния соединения
+            this.peerConnection.onconnectionstatechange = () => {
+                console.log('🔗 Connection state:', this.peerConnection.connectionState);
+                switch(this.peerConnection.connectionState) {
+                    case 'connected':
+                        this.updateStatus('Streaming!', 'connected');
+                        break;
+                    case 'disconnected':
+                    case 'failed':
+                        this.updateStatus('Connection lost', 'error');
+                        break;
                 }
             };
 
-            // Создаем и отправляем offer
-            const offer = await peerConnection.createOffer();
-            await peerConnection.setLocalDescription(offer);
+            this.peerConnection.oniceconnectionstatechange = () => {
+                console.log('❄️ ICE state:', this.peerConnection.iceConnectionState);
+            };
 
+            // Создаем и отправляем offer
+            const offer = await this.peerConnection.createOffer({
+                offerToReceiveAudio: true,
+                offerToReceiveVideo: true
+            });
+            
+            await this.peerConnection.setLocalDescription(offer);
+            
             this.socket.emit('webrtc-offer', {
                 target: clientId,
                 offer: offer
             });
 
-            this.peerConnections.set(clientId, peerConnection);
-            console.log('✅ Peer connection created and offer sent');
+            console.log('✅ Offer created and sent');
 
         } catch (error) {
-            console.error('❌ Error creating peer connection:', error);
+            console.error('❌ Peer connection error:', error);
             this.updateStatus('Connection error', 'error');
         }
     }
 
-    async handleAnswer(clientId, answer) {
+    async handleAnswer(answer) {
         try {
-            const peerConnection = this.peerConnections.get(clientId);
-            if (peerConnection) {
-                await peerConnection.setRemoteDescription(answer);
-                console.log('✅ Answer processed for client:', clientId);
+            if (this.peerConnection) {
+                await this.peerConnection.setRemoteDescription(answer);
+                console.log('✅ Answer processed successfully');
             }
         } catch (error) {
             console.error('❌ Error handling answer:', error);
         }
     }
 
-    handleIceCandidate(clientId, candidate) {
+    handleIceCandidate(candidate) {
         try {
-            const peerConnection = this.peerConnections.get(clientId);
-            if (peerConnection && candidate) {
-                peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+            if (this.peerConnection && candidate) {
+                this.peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
             }
         } catch (error) {
             console.error('❌ Error adding ICE candidate:', error);
@@ -226,10 +202,6 @@ class HostController {
         this.statusDot.className = 'status-dot ' + status;
     }
 
-    updateConnectedClients(count) {
-        this.connectedClientsElement.textContent = `${count}/5`;
-    }
-
     copySessionId() {
         if (this.sessionId) {
             navigator.clipboard.writeText(this.sessionId);
@@ -238,18 +210,16 @@ class HostController {
     }
 
     stopHosting() {
-        console.log('🛑 Stopping hosting...');
-        
         if (this.localStream) {
             this.localStream.getTracks().forEach(track => track.stop());
         }
-
-        this.peerConnections.forEach(pc => pc.close());
-        this.peerConnections.clear();
-
+        if (this.peerConnection) {
+            this.peerConnection.close();
+        }
         window.location.href = '/';
     }
 }
 
-// Автозапуск при загрузке страницы
-document.addEventListener('DOMContent
+document.addEventListener('DOMContentLoaded', () => {
+    new HostController();
+});
