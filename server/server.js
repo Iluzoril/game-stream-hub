@@ -67,17 +67,39 @@ io.on('connection', (socket) => {
     });
   });
 
-  // WebRTC signaling
+  // WebRTC signaling - ВАЖНО: передаем данные правильно
   socket.on('webrtc-offer', (data) => {
-    socket.to(data.target).emit('webrtc-offer', data.offer);
+    console.log('📨 Forwarding offer to:', data.target);
+    // Передаем ВЕСЬ объект data, а не только offer
+    socket.to(data.target).emit('webrtc-offer', {
+      type: 'offer',
+      offer: data.offer,
+      sender: socket.id
+    });
   });
 
   socket.on('webrtc-answer', (data) => {
-    socket.to(data.target).emit('webrtc-answer', data.answer);
+    console.log('📨 Forwarding answer to:', data.target);
+    socket.to(data.target).emit('webrtc-answer', {
+      type: 'answer', 
+      answer: data.answer,
+      sender: socket.id
+    });
   });
 
   socket.on('ice-candidate', (data) => {
-    socket.to(data.target).emit('ice-candidate', data.candidate);
+    console.log('❄️ Forwarding ICE candidate to:', data.target);
+    // ВАЖНО: передаем объект candidate правильно
+    socket.to(data.target).emit('ice-candidate', {
+      type: 'candidate',
+      candidate: data.candidate ? {
+        candidate: data.candidate.candidate,
+        sdpMid: data.candidate.sdpMid || '',
+        sdpMLineIndex: data.candidate.sdpMLineIndex || 0,
+        usernameFragment: data.candidate.usernameFragment || null
+      } : null,
+      sender: socket.id
+    });
   });
 
   socket.on('disconnect', () => {
