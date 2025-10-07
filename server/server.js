@@ -6,11 +6,14 @@ const path = require('path');
 
 const app = express();
 const server = http.createServer(app);
+
+// Важные настройки для Socket.IO на Render
 const io = socketIo(server, {
   cors: {
     origin: "*",
     methods: ["GET", "POST"]
-  }
+  },
+  transports: ['websocket', 'polling']
 });
 
 app.use(cors());
@@ -34,8 +37,8 @@ app.get('/client', (req, res) => {
 app.get('/api/status', (req, res) => {
   res.json({ 
     status: 'OK', 
-    message: 'Server is running',
-    timestamp: new Date().toISOString()
+    message: 'Server is running on Render',
+    url: 'https://game-stream-hub.onrender.com'
   });
 });
 
@@ -50,13 +53,17 @@ io.on('connection', (socket) => {
     const sessionId = generateSessionId();
     sessions.set(sessionId, {
       hostId: socket.id,
-      clients: new Map() // Используем Map вместо Set для хранения данных клиентов
+      clients: new Map(),
+      createdAt: new Date()
     });
 
     socket.join(sessionId);
+    
+    // Отправляем ТОЛЬКО sessionId, остальное клиент соберет сам
     socket.emit('session-created', { 
-      sessionId
+      sessionId: sessionId
     });
+    
     console.log('🎮 Session created:', sessionId, 'by', socket.id);
   });
 
@@ -65,11 +72,10 @@ io.on('connection', (socket) => {
     const session = sessions.get(sessionId);
     
     if (!session) {
-      socket.emit('session-error', { message: 'Session not found' });
+      socket.emit('session-error', { message: 'Session not found. Check the ID.' });
       return;
     }
 
-    // Сохраняем клиента с дополнительной информацией
     session.clients.set(socket.id, {
       id: socket.id,
       connectedAt: new Date()
@@ -77,22 +83,22 @@ io.on('connection', (socket) => {
 
     socket.join(sessionId);
     socket.emit('session-joined', { 
-      sessionId,
+      sessionId: sessionId,
       hostId: session.hostId
     });
     
-    // Уведомляем хост о новом клиенте
+    // Уведомляем хост
     socket.to(session.hostId).emit('client-connected', { 
       clientId: socket.id,
       totalClients: session.clients.size
     });
 
-    console.log('👥 Client joined:', socket.id, 'to session:', sessionId, 'Total clients:', session.clients.size);
+    console.log('👥 Client', socket.id, 'joined session:', sessionId);
   });
 
   // WebRTC signaling
   socket.on('webrtc-offer', (data) => {
-    console.log('📨 Forwarding offer from', socket.id, 'to', data.target);
+    console.log('📨 Forwarding offer to:', data.target);
     socket.to(data.target).emit('webrtc-offer', {
       offer: data.offer,
       sender: socket.id
@@ -100,7 +106,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('webrtc-answer', (data) => {
-    console.log('📨 Forwarding answer from', socket.id, 'to', data.target);
+    console.log('📨 Forwarding answer to:', data.target);
     socket.to(data.target).emit('webrtc-answer', {
       answer: data.answer,
       sender: socket.id
@@ -125,7 +131,7 @@ io.on('connection', (socket) => {
     
     for (const [sessionId, session] of sessions.entries()) {
       if (session.hostId === socket.id) {
-        // Хост отключился - уведомляем всех клиентов
+        // Хост отключился
         io.to(sessionId).emit('session-ended', { reason: 'Host disconnected' });
         sessions.delete(sessionId);
         console.log('🗑️ Session deleted:', sessionId);
@@ -139,7 +145,7 @@ io.on('connection', (socket) => {
           clientId: socket.id,
           totalClients: session.clients.size
         });
-        console.log('👋 Client removed:', socket.id, 'from session:', sessionId);
+        console.log('👋 Client removed from session:', sessionId);
       }
     }
   });
@@ -150,9 +156,9 @@ function generateSessionId() {
 }
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
+server.listen(PORT, '0.0.0.0', () => {
   console.log('=================================');
-  console.log('🚀 GameStream Hub Server Started');
-  console.log('📍 http://localhost:' + PORT);
+  console.log('🚀 Server running on Render');
+  console.log('📍 Port:', PORT);
   console.log('=================================');
 });
