@@ -47,43 +47,27 @@ class ClientController {
             this.showError(data.message);
         });
 
-        this.socket.on('webrtc-offer', async (offer) => {
-            await this.handleOffer(offer);
+        this.socket.on('webrtc-offer', async (data) => {
+            console.log('📨 Received WebRTC offer from host');
+            await this.handleOffer(data.offer);
         });
 
-        this.socket.on('webrtc-answer', async (answer) => {
-            if (this.peerConnection) {
-                await this.peerConnection.setRemoteDescription(answer);
+        this.socket.on('webrtc-answer', async (data) => {
+            if (this.peerConnection && data.answer) {
+                await this.peerConnection.setRemoteDescription(data.answer);
             }
         });
 
-        this.socket.on('ice-candidate', (candidate) => {
-            if (this.peerConnection && candidate) {
-                this.peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
-            }
+        this.socket.on('ice-candidate', (data) => {
+            console.log('❄️ Received ICE candidate from host');
+            this.handleIceCandidate(data.candidate);
         });
     }
 
     initializeVideoHandling() {
-        // Настройка видео элемента для лучшей совместимости
         this.remoteVideo.playsInline = true;
-        this.remoteVideo.muted = true; // Важно для автовоспроизведения
+        this.remoteVideo.muted = true;
         this.remoteVideo.setAttribute('playsinline', 'true');
-        
-        // Обработчики событий видео
-        this.remoteVideo.addEventListener('loadeddata', () => {
-            console.log('✅ Video data loaded');
-        });
-        
-        this.remoteVideo.addEventListener('canplay', () => {
-            console.log('▶️ Video can play');
-            this.loadingMessage.style.display = 'none';
-        });
-        
-        this.remoteVideo.addEventListener('error', (e) => {
-            console.error('❌ Video error:', e);
-            this.showError('Video playback error');
-        });
     }
 
     connectToSession() {
@@ -139,11 +123,16 @@ class ClientController {
 
     async handleOffer(offer) {
         try {
-            console.log('📨 Handling WebRTC offer');
+            console.log('🔗 Handling WebRTC offer:', offer);
             
+            // Проверяем что offer валидный
+            if (!offer || !offer.type || !offer.sdp) {
+                throw new Error('Invalid offer received');
+            }
+
             this.peerConnection = new RTCPeerConnection(this.configuration);
 
-            // ВАЖНО: Правильная обработка видеопотока
+            // Обработчик видеопотока
             this.peerConnection.ontrack = (event) => {
                 console.log('🎬 Track event received:', event);
                 
@@ -151,11 +140,9 @@ class ClientController {
                     const stream = event.streams[0];
                     console.log('📹 Stream received with', stream.getTracks().length, 'tracks');
                     
-                    // Устанавливаем поток в видео элемент
                     this.remoteVideo.srcObject = stream;
-                    this.updateStatus('Video connected! Starting playback...');
+                    this.updateStatus('Video connected!');
                     
-                    // Пытаемся воспроизвести видео
                     this.playVideoWithRetry();
                 }
             };
@@ -163,61 +150,75 @@ class ClientController {
             // ICE кандидаты
             this.peerConnection.onicecandidate = (event) => {
                 if (event.candidate) {
+                    console.log('❄️ Sending ICE candidate to host');
                     this.socket.emit('ice-candidate', {
                         target: 'host',
-                        candidate: event.candidate
+                        candidate: {
+                            candidate: event.candidate.candidate,
+                            sdpMid: event.candidate.sdpMid,
+                            sdpMLineIndex: event.candidate.sdpMLineIndex,
+                            usernameFragment: event.candidate.usernameFragment
+                        }
                     });
                 }
             };
 
-            // Устанавливаем offer
+            // ВАЖНО: Устанавливаем offer
+            console.log('✅ Setting remote description');
             await this.peerConnection.setRemoteDescription(offer);
+            
+            // Создаем answer
             const answer = await this.peerConnection.createAnswer();
             await this.peerConnection.setLocalDescription(answer);
 
+            console.log('📨 Sending answer to host');
             this.socket.emit('webrtc-answer', {
                 target: 'host',
                 answer: answer
             });
 
-            console.log('✅ WebRTC negotiation completed');
+            this.updateStatus('WebRTC connected!');
 
         } catch (error) {
-            console.error('❌ WebRTC error:', error);
-            this.showError('Connection failed');
+            console.error('❌ Error handling offer:', error);
+            this.showError('WebRTC connection failed: ' + error.message);
         }
     }
 
     async playVideoWithRetry() {
         try {
-            // Ждем немного перед воспроизведением
-            await new Promise(resolve => setTimeout(resolve, 1000));
-            
-            // Пытаемся воспроизвести
+            await new Promise(resolve => setTimeout(resolve, 500));
             await this.remoteVideo.play();
-            console.log('✅ Video playback started successfully');
+            console.log('✅ Video playback started');
             this.loadingMessage.style.display = 'none';
             this.updateStatus('Streaming!');
-            
         } catch (playError) {
-            console.log('⚠️ Auto-play failed, trying with user gesture...');
-            
-            // Показываем сообщение для пользователя
-            this.loadingMessage.innerHTML = 'Click to start video playback';
+            console.log('⚠️ Auto-play failed');
+            this.loadingMessage.innerHTML = 'Click to start video';
             this.loadingMessage.style.cursor = 'pointer';
             this.loadingMessage.onclick = () => {
                 this.remoteVideo.play().then(() => {
                     this.loadingMessage.style.display = 'none';
-                }).catch(e => {
-                    console.error('❌ Manual play also failed:', e);
                 });
             };
         }
     }
 
     handleIceCandidate(candidate) {
-        if (this.peerConnection && candidate) {
-            this.peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+        try {
+            if (this.peerConnection && candidate) {
+                console.log('✅ Adding ICE candidate from host');
+                // ВАЖНО: создаем кандидата правильно
+                const iceCandidate = new RTCIceCandidate({
+                    candidate: candidate.candidate,
+                    sdpMid: candidate.sdpMid || null,
+                    sdpMLineIndex: candidate.sdpMLineIndex || 0,
+                    usernameFragment: candidate.usernameFragment || null
+                });
+                this.peerConnection.addIceCandidate(iceCandidate);
+            }
+        } catch (error) {
+            console.error('❌ Error adding ICE candidate:', error);
         }
     }
 
