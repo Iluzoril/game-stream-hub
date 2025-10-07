@@ -5,27 +5,11 @@ class HostController {
         this.localStream = null;
         this.peerConnection = null;
         
-        // УЛУЧШЕННАЯ конфигурация WebRTC
+        // ОЧЕНЬ ПРОСТАЯ конфигурация WebRTC
         this.configuration = {
             iceServers: [
-                { urls: 'stun:stun.l.google.com:19302' },
-                { urls: 'stun:stun1.l.google.com:19302' },
-                { urls: 'stun:stun2.l.google.com:19302' },
-                // Бесплатные TURN серверы для обхода NAT
-                {
-                    urls: 'turn:openrelay.metered.ca:80',
-                    username: 'openrelayproject',
-                    credential: 'openrelayproject'
-                },
-                {
-                    urls: 'turn:openrelay.metered.ca:443',
-                    username: 'openrelayproject',
-                    credential: 'openrelayproject'
-                }
-            ],
-            iceTransportPolicy: 'all',
-            bundlePolicy: 'max-bundle',
-            rtcpMuxPolicy: 'require'
+                { urls: 'stun:stun.l.google.com:19302' }
+            ]
         };
 
         this.initializeElements();
@@ -36,7 +20,6 @@ class HostController {
     initializeElements() {
         this.statusIndicator = document.getElementById('statusIndicator');
         this.statusText = this.statusIndicator.querySelector('.status-text');
-        this.statusDot = this.statusIndicator.querySelector('.status-dot');
         this.sessionIdElement = document.getElementById('sessionId');
         this.connectedClientsElement = document.getElementById('connectedClients');
         this.localVideo = document.getElementById('localVideo');
@@ -65,11 +48,15 @@ class HostController {
         });
 
         this.socket.on('webrtc-answer', async (answer) => {
-            await this.handleAnswer(answer);
+            if (this.peerConnection) {
+                await this.peerConnection.setRemoteDescription(answer);
+            }
         });
 
         this.socket.on('ice-candidate', (candidate) => {
-            this.handleIceCandidate(candidate);
+            if (this.peerConnection && candidate) {
+                this.peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+            }
         });
     }
 
@@ -77,32 +64,17 @@ class HostController {
         try {
             this.updateStatus('Requesting screen access...', 'waiting');
             
-            // ЗАХВАТ ЭКРАНА с улучшенными настройками
+            // ПРОСТОЙ захват экрана
             this.localStream = await navigator.mediaDevices.getDisplayMedia({
-                video: {
-                    cursor: 'always',
-                    displaySurface: 'monitor',
-                    frameRate: { ideal: 30, max: 60 },
-                    width: { ideal: 1280 },
-                    height: { ideal: 720 }
-                },
-                audio: {
-                    echoCancellation: true,
-                    noiseSuppression: true,
-                    sampleRate: 44100
-                }
+                video: true,
+                audio: false // Отключаем аудио для простоты
             });
 
-            console.log('🎥 Screen capture started. Tracks:', this.localStream.getTracks().length);
+            console.log('🎥 Screen capture started');
 
             // Показываем локальное видео
             this.localVideo.srcObject = this.localStream;
             
-            // Обработчик остановки
-            this.localStream.getVideoTracks()[0].addEventListener('ended', () => {
-                this.stopHosting();
-            });
-
             // Создаем сессию
             this.socket.emit('create-session', {});
             this.updateStatus('Screen sharing active', 'connected');
@@ -120,16 +92,15 @@ class HostController {
             
             this.peerConnection = new RTCPeerConnection(this.configuration);
 
-            // ВАЖНО: Добавляем все треки в соединение
+            // Добавляем ВСЕ треки
             this.localStream.getTracks().forEach(track => {
-                console.log('➕ Adding track:', track.kind, track);
+                console.log('➕ Adding track:', track.kind);
                 this.peerConnection.addTrack(track, this.localStream);
             });
 
-            // Обработчик ICE кандидатов
+            // ICE кандидаты
             this.peerConnection.onicecandidate = (event) => {
                 if (event.candidate) {
-                    console.log('❄️ Sending ICE candidate');
                     this.socket.emit('ice-candidate', {
                         target: clientId,
                         candidate: event.candidate
@@ -137,30 +108,8 @@ class HostController {
                 }
             };
 
-            // Отслеживание состояния соединения
-            this.peerConnection.onconnectionstatechange = () => {
-                console.log('🔗 Connection state:', this.peerConnection.connectionState);
-                switch(this.peerConnection.connectionState) {
-                    case 'connected':
-                        this.updateStatus('Streaming!', 'connected');
-                        break;
-                    case 'disconnected':
-                    case 'failed':
-                        this.updateStatus('Connection lost', 'error');
-                        break;
-                }
-            };
-
-            this.peerConnection.oniceconnectionstatechange = () => {
-                console.log('❄️ ICE state:', this.peerConnection.iceConnectionState);
-            };
-
-            // Создаем и отправляем offer
-            const offer = await this.peerConnection.createOffer({
-                offerToReceiveAudio: true,
-                offerToReceiveVideo: true
-            });
-            
+            // Создаем offer с базовыми настройками
+            const offer = await this.peerConnection.createOffer();
             await this.peerConnection.setLocalDescription(offer);
             
             this.socket.emit('webrtc-offer', {
@@ -168,32 +117,10 @@ class HostController {
                 offer: offer
             });
 
-            console.log('✅ Offer created and sent');
+            console.log('✅ Offer sent to client');
 
         } catch (error) {
             console.error('❌ Peer connection error:', error);
-            this.updateStatus('Connection error', 'error');
-        }
-    }
-
-    async handleAnswer(answer) {
-        try {
-            if (this.peerConnection) {
-                await this.peerConnection.setRemoteDescription(answer);
-                console.log('✅ Answer processed successfully');
-            }
-        } catch (error) {
-            console.error('❌ Error handling answer:', error);
-        }
-    }
-
-    handleIceCandidate(candidate) {
-        try {
-            if (this.peerConnection && candidate) {
-                this.peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
-            }
-        } catch (error) {
-            console.error('❌ Error adding ICE candidate:', error);
         }
     }
 
