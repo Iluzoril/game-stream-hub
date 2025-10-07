@@ -3,35 +3,15 @@ const http = require('http');
 const socketIo = require('socket.io');
 const cors = require('cors');
 const path = require('path');
-const os = require('os');
-
-// Функция для получения IP адреса
-function getLocalIP() {
-    const interfaces = os.networkInterfaces();
-    for (const name of Object.keys(interfaces)) {
-        for (const interface of interfaces[name]) {
-            if (interface.family === 'IPv4' && !interface.internal) {
-                return interface.address;
-            }
-        }
-    }
-    return 'localhost';
-}
-
-const localIP = getLocalIP();
-const PORT = process.env.PORT || 3000;
-const isProduction = process.env.NODE_ENV === 'production';
 
 const app = express();
 const server = http.createServer(app);
-
-// Важные настройки для Socket.IO
 const io = socketIo(server, {
   cors: {
     origin: "*",
     methods: ["GET", "POST"]
   },
-  transports: ['websocket', 'polling'] // Важно для WebRTC
+  transports: ['websocket', 'polling']
 });
 
 app.use(cors());
@@ -51,27 +31,12 @@ app.get('/client', (req, res) => {
   res.sendFile(path.join(__dirname, '../client/client.html'));
 });
 
-// API для получения информации о сервере
-app.get('/api/server-info', (req, res) => {
-  res.json({
-    ip: localIP,
-    port: PORT,
-    urls: {
-      main: `http://${localIP}:${PORT}`,
-      host: `http://${localIP}:${PORT}/host`,
-      client: `http://${localIP}:${PORT}/client`
-    }
-  });
-});
-
+// API для проверки
 app.get('/api/status', (req, res) => {
   res.json({ 
     status: 'OK', 
-    message: 'GameStream Hub Server is running',
-    ip: localIP,
-    port: PORT,
-    timestamp: new Date().toISOString(),
-    sessions: sessions.size
+    message: 'Server is running',
+    timestamp: new Date().toISOString()
   });
 });
 
@@ -79,134 +44,82 @@ app.get('/api/status', (req, res) => {
 const sessions = new Map();
 
 io.on('connection', (socket) => {
-  console.log('✅ User connected:', socket.id);
+  console.log('🔗 User connected:', socket.id);
 
-  // Создание сессии для хоста
+  // Создание сессии
   socket.on('create-session', (data) => {
     const sessionId = generateSessionId();
     sessions.set(sessionId, {
       hostId: socket.id,
-      clients: new Set(),
-      game: data.game || 'Desktop Stream',
-      createdAt: new Date()
+      clients: new Set()
     });
 
     socket.join(sessionId);
     socket.emit('session-created', { 
       sessionId,
-      connectionUrl: `http://${localIP}:${PORT}/client`
+      connectionUrl: `http://localhost:3000/client`
     });
-    console.log(`🎮 Session created: ${sessionId} by ${socket.id}`);
+    console.log('🎮 Session created:', sessionId);
   });
 
-  // Подключение клиента к сессии
+  // Подключение клиента
   socket.on('join-session', (sessionId) => {
     const session = sessions.get(sessionId);
     
     if (!session) {
-      socket.emit('session-error', { message: 'Сессия не найдена. Проверьте ID.' });
+      socket.emit('session-error', { message: 'Session not found' });
       return;
     }
 
     session.clients.add(socket.id);
     socket.join(sessionId);
-    socket.emit('session-joined', { 
-      sessionId,
-      hostId: session.hostId 
-    });
+    socket.emit('session-joined', { sessionId });
     
-    // Уведомляем хост о новом клиенте
+    // Уведомляем хост
     socket.to(session.hostId).emit('client-connected', { 
-      clientId: socket.id,
-      totalClients: session.clients.size
+      clientId: socket.id
     });
 
-    console.log(`🔗 Client ${socket.id} joined session ${sessionId}`);
+    console.log('👥 Client joined:', socket.id, 'to session:', sessionId);
   });
 
-  // WebRTC signaling - ОЧЕНЬ ВАЖНО!
+  // WebRTC signaling - ПРОСТАЯ версия
   socket.on('webrtc-offer', (data) => {
-    console.log('📨 Offer from:', data.sender, 'to:', data.target);
-    socket.to(data.target).emit('webrtc-offer', {
-      offer: data.offer,
-      sender: socket.id
-    });
+    console.log('📨 Forwarding offer to:', data.target);
+    socket.to(data.target).emit('webrtc-offer', data.offer);
   });
 
   socket.on('webrtc-answer', (data) => {
-    console.log('📨 Answer from:', data.sender, 'to:', data.target);
-    socket.to(data.target).emit('webrtc-answer', {
-      answer: data.answer,
-      sender: socket.id
-    });
+    console.log('📨 Forwarding answer to:', data.target);
+    socket.to(data.target).emit('webrtc-answer', data.answer);
   });
 
   socket.on('ice-candidate', (data) => {
-    socket.to(data.target).emit('ice-candidate', {
-      candidate: data.candidate,
-      sender: socket.id
-    });
-  });
-
-  // Передача input данных от клиента к хосту
-  socket.on('client-input', (data) => {
-    const session = findSessionByClient(socket.id);
-    if (session) {
-      socket.to(session.hostId).emit('client-input', data);
-    }
-  });
-
-  // Пинг-понг для проверки соединения
-  socket.on('ping', (timestamp) => {
-    socket.emit('pong', timestamp);
+    socket.to(data.target).emit('ice-candidate', data.candidate);
   });
 
   // Отслеживание отключений
-  socket.on('disconnect', (reason) => {
-    console.log('❌ User disconnected:', socket.id, 'Reason:', reason);
+  socket.on('disconnect', () => {
+    console.log('❌ User disconnected:', socket.id);
     
-    // Удаляем клиента из сессий
     for (const [sessionId, session] of sessions.entries()) {
       if (session.hostId === socket.id) {
-        // Хост отключился - закрываем сессию
-        io.to(sessionId).emit('session-ended', { reason: 'Хост отключился' });
         sessions.delete(sessionId);
-        console.log(`🗑️ Session ${sessionId} ended (host disconnected)`);
+        console.log('🗑️ Session deleted:', sessionId);
         break;
-      }
-      
-      if (session.clients.has(socket.id)) {
-        // Клиент отключился
-        session.clients.delete(socket.id);
-        socket.to(session.hostId).emit('client-disconnected', {
-          clientId: socket.id,
-          totalClients: session.clients.size
-        });
-        console.log(`👋 Client ${socket.id} left session ${sessionId}`);
       }
     }
   });
-
-  function findSessionByClient(clientId) {
-    for (const session of sessions.values()) {
-      if (session.clients.has(clientId)) {
-        return session;
-      }
-    }
-    return null;
-  }
 });
 
 function generateSessionId() {
-  return Math.random().toString(36).substring(2, 8).toUpperCase();
+  return Math.random().toString(36).substring(2, 6).toUpperCase();
 }
 
-// Запуск сервера
+const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-  console.log(`=================================`);
-  console.log(`🚀 GameStream Hub Server Started`);
-  console.log(`📍 Local:  http://localhost:${PORT}`);
-  console.log(`📍 Network: http://${localIP}:${PORT}`);
-  console.log(`🔧 API Status: http://${localIP}:${PORT}/api/status`);
-  console.log(`=================================`);
+  console.log('=================================');
+  console.log('🚀 Server running on port', PORT);
+  console.log('📍 http://localhost:' + PORT);
+  console.log('=================================');
 });
