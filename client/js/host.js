@@ -19,6 +19,7 @@ class HostController {
     initializeElements() {
         this.statusIndicator = document.getElementById('statusIndicator');
         this.statusText = this.statusIndicator.querySelector('.status-text');
+        this.statusDot = this.statusIndicator.querySelector('.status-dot');
         this.sessionIdElement = document.getElementById('sessionId');
         this.connectedClientsElement = document.getElementById('connectedClients');
         this.localVideo = document.getElementById('localVideo');
@@ -46,14 +47,12 @@ class HostController {
             this.createPeerConnection(data.clientId);
         });
 
-        this.socket.on('webrtc-answer', async (data) => {
-            console.log('📨 Received answer from client');
-            await this.handleAnswer(data.answer);
+        this.socket.on('webrtc-answer', async (answer) => {
+            await this.handleAnswer(answer);
         });
 
-        this.socket.on('ice-candidate', (data) => {
-            console.log('❄️ Received ICE candidate from client');
-            this.handleIceCandidate(data.candidate);
+        this.socket.on('ice-candidate', (candidate) => {
+            this.handleIceCandidate(candidate);
         });
     }
 
@@ -96,16 +95,18 @@ class HostController {
             this.peerConnection.onicecandidate = (event) => {
                 if (event.candidate) {
                     console.log('❄️ Sending ICE candidate');
-                    // ВАЖНО: передаем правильный формат candidate
                     this.socket.emit('ice-candidate', {
                         target: clientId,
-                        candidate: {
-                            candidate: event.candidate.candidate,
-                            sdpMid: event.candidate.sdpMid,
-                            sdpMLineIndex: event.candidate.sdpMLineIndex,
-                            usernameFragment: event.candidate.usernameFragment
-                        }
+                        candidate: event.candidate
                     });
+                }
+            };
+
+            // Отслеживание состояния соединения
+            this.peerConnection.onconnectionstatechange = () => {
+                console.log('🔗 Connection state:', this.peerConnection.connectionState);
+                if (this.peerConnection.connectionState === 'connected') {
+                    this.updateStatus('Streaming to client!', 'connected');
                 }
             };
 
@@ -113,7 +114,7 @@ class HostController {
             const offer = await this.peerConnection.createOffer();
             await this.peerConnection.setLocalDescription(offer);
             
-            console.log('📨 Sending offer to client:', offer.type);
+            console.log('📨 Sending offer to client');
             
             this.socket.emit('webrtc-offer', {
                 target: clientId,
