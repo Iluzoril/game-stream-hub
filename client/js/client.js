@@ -5,10 +5,12 @@ class ClientController {
         
         this.configuration = {
             iceServers: [
-                { urls: 'stun:stun.l.google.com:19302' }
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' }
             ]
         };
 
+        this.isConnected = false;
         this.initializeElements();
         this.initializeSocketListeners();
         this.initializeVideoHandling();
@@ -47,17 +49,19 @@ class ClientController {
             this.showError(data.message);
         });
 
+        // ✅ ПРАВИЛЬНО: получаем объект с offer
         this.socket.on('webrtc-offer', async (data) => {
             console.log('📨 Received WebRTC offer from host');
             await this.handleOffer(data.offer);
         });
 
         this.socket.on('webrtc-answer', async (data) => {
-            if (this.peerConnection && data.answer) {
+            if (this.peerConnection) {
                 await this.peerConnection.setRemoteDescription(data.answer);
             }
         });
 
+        // ✅ ПРАВИЛЬНО: получаем объект с candidate
         this.socket.on('ice-candidate', (data) => {
             console.log('❄️ Received ICE candidate from host');
             this.handleIceCandidate(data.candidate);
@@ -85,7 +89,7 @@ class ClientController {
         this.socket.emit('join-session', sessionId);
         
         setTimeout(() => {
-            if (this.connectBtn.disabled) {
+            if (this.connectBtn.disabled && !this.isConnected) {
                 this.showError('Connection timeout');
             }
         }, 10000);
@@ -125,9 +129,8 @@ class ClientController {
         try {
             console.log('🔗 Handling WebRTC offer:', offer);
             
-            // Проверяем что offer валидный
-            if (!offer || !offer.type || !offer.sdp) {
-                throw new Error('Invalid offer received');
+            if (!offer || typeof offer !== 'object') {
+                throw new Error('Invalid offer format');
             }
 
             this.peerConnection = new RTCPeerConnection(this.configuration);
@@ -137,10 +140,8 @@ class ClientController {
                 console.log('🎬 Track event received:', event);
                 
                 if (event.streams && event.streams[0]) {
-                    const stream = event.streams[0];
-                    console.log('📹 Stream received with', stream.getTracks().length, 'tracks');
-                    
-                    this.remoteVideo.srcObject = stream;
+                    this.remoteVideo.srcObject = event.streams[0];
+                    this.isConnected = true;
                     this.updateStatus('Video connected!');
                     
                     this.playVideoWithRetry();
@@ -150,28 +151,18 @@ class ClientController {
             // ICE кандидаты
             this.peerConnection.onicecandidate = (event) => {
                 if (event.candidate) {
-                    console.log('❄️ Sending ICE candidate to host');
                     this.socket.emit('ice-candidate', {
                         target: 'host',
-                        candidate: {
-                            candidate: event.candidate.candidate,
-                            sdpMid: event.candidate.sdpMid,
-                            sdpMLineIndex: event.candidate.sdpMLineIndex,
-                            usernameFragment: event.candidate.usernameFragment
-                        }
+                        candidate: event.candidate
                     });
                 }
             };
 
-            // ВАЖНО: Устанавливаем offer
-            console.log('✅ Setting remote description');
+            // Устанавливаем offer
             await this.peerConnection.setRemoteDescription(offer);
-            
-            // Создаем answer
             const answer = await this.peerConnection.createAnswer();
             await this.peerConnection.setLocalDescription(answer);
 
-            console.log('📨 Sending answer to host');
             this.socket.emit('webrtc-answer', {
                 target: 'host',
                 answer: answer
@@ -181,13 +172,12 @@ class ClientController {
 
         } catch (error) {
             console.error('❌ Error handling offer:', error);
-            this.showError('WebRTC connection failed: ' + error.message);
+            this.showError('Connection failed: ' + error.message);
         }
     }
 
     async playVideoWithRetry() {
         try {
-            await new Promise(resolve => setTimeout(resolve, 500));
             await this.remoteVideo.play();
             console.log('✅ Video playback started');
             this.loadingMessage.style.display = 'none';
@@ -204,18 +194,12 @@ class ClientController {
         }
     }
 
+    // ✅ ПРАВИЛЬНАЯ обработка candidate
     handleIceCandidate(candidate) {
         try {
             if (this.peerConnection && candidate) {
                 console.log('✅ Adding ICE candidate from host');
-                // ВАЖНО: создаем кандидата правильно
-                const iceCandidate = new RTCIceCandidate({
-                    candidate: candidate.candidate,
-                    sdpMid: candidate.sdpMid || null,
-                    sdpMLineIndex: candidate.sdpMLineIndex || 0,
-                    usernameFragment: candidate.usernameFragment || null
-                });
-                this.peerConnection.addIceCandidate(iceCandidate);
+                this.peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
             }
         } catch (error) {
             console.error('❌ Error adding ICE candidate:', error);
@@ -223,6 +207,7 @@ class ClientController {
     }
 
     disconnect() {
+        this.isConnected = false;
         if (this.peerConnection) {
             this.peerConnection.close();
         }
