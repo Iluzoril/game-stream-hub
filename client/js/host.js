@@ -86,6 +86,9 @@ class HostController {
             });
 
             console.log('🎥 Screen capture started. Tracks:', this.localStream.getTracks().length);
+            this.localStream.getTracks().forEach(track => {
+                console.log('📹 Track:', track.kind, 'id:', track.id, 'enabled:', track.enabled, 'readyState:', track.readyState);
+            });
 
             // Показываем локальное видео
             this.localVideo.srcObject = this.localStream;
@@ -117,14 +120,18 @@ class HostController {
 
             // ВАЖНО: Добавляем все треки в соединение
             this.localStream.getTracks().forEach(track => {
-                console.log('➕ Adding track:', track.kind, track);
-                this.peerConnection.addTrack(track, this.localStream);
+                console.log('➕ Adding track:', track.kind, 'id:', track.id, 'enabled:', track.enabled, 'readyState:', track.readyState);
+                const sender = this.peerConnection.addTrack(track, this.localStream);
+                console.log('🎯 Sender created:', sender);
             });
 
+            // Проверяем senders
+            console.log('📡 Current senders:', this.peerConnection.getSenders().length);
+            
             // Обработчик ICE кандидатов
             this.peerConnection.onicecandidate = (event) => {
                 if (event.candidate) {
-                    console.log('❄️ Sending ICE candidate to client');
+                    console.log('❄️ Sending ICE candidate to client:', event.candidate.candidate.substring(0, 50) + '...');
                     this.socket.emit('ice-candidate', {
                         target: clientId,
                         candidate: event.candidate
@@ -142,6 +149,13 @@ class HostController {
                 switch(state) {
                     case 'connected':
                         this.updateStatus('Streaming to client!', 'connected');
+                        // Проверяем состояние треков после подключения
+                        setTimeout(() => {
+                            console.log('🎯 Senders after connection:', this.peerConnection.getSenders().length);
+                            this.peerConnection.getSenders().forEach((sender, index) => {
+                                console.log(`Sender ${index}:`, sender.track ? `track: ${sender.track.kind} (${sender.track.readyState})` : 'no track');
+                            });
+                        }, 1000);
                         break;
                     case 'disconnected':
                         this.updateStatus('Connection lost', 'waiting');
@@ -157,7 +171,11 @@ class HostController {
             };
 
             // Создаем offer
+            console.log('🎯 Creating offer...');
             const offer = await this.peerConnection.createOffer();
+            console.log('✅ Offer created, type:', offer.type);
+            console.log('📝 Offer SDP:', offer.sdp.substring(0, 200) + '...');
+            
             await this.peerConnection.setLocalDescription(offer);
             
             console.log('📨 Sending offer to client');
