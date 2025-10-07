@@ -30,6 +30,14 @@ app.get('/client', (req, res) => {
   res.sendFile(path.join(__dirname, '../client/client.html'));
 });
 
+app.get('/api/status', (req, res) => {
+  res.json({ 
+    status: 'OK', 
+    message: 'Server is running',
+    timestamp: new Date().toISOString()
+  });
+});
+
 // Хранилище сессий
 const sessions = new Map();
 
@@ -62,48 +70,46 @@ io.on('connection', (socket) => {
     socket.join(sessionId);
     socket.emit('session-joined', { sessionId });
     
+    // Уведомляем хост
     socket.to(session.hostId).emit('client-connected', { 
       clientId: socket.id
     });
+
+    console.log('👤 Client joined session:', sessionId);
   });
 
-  // WebRTC signaling - ВАЖНО: передаем данные правильно
+  // WebRTC signaling - ПРАВИЛЬНАЯ передача
   socket.on('webrtc-offer', (data) => {
     console.log('📨 Forwarding offer to:', data.target);
-    // Передаем ВЕСЬ объект data, а не только offer
     socket.to(data.target).emit('webrtc-offer', {
-      type: 'offer',
-      offer: data.offer,
-      sender: socket.id
+      offer: data.offer  // ✅ Передаем объект с offer
     });
   });
 
   socket.on('webrtc-answer', (data) => {
     console.log('📨 Forwarding answer to:', data.target);
     socket.to(data.target).emit('webrtc-answer', {
-      type: 'answer', 
-      answer: data.answer,
-      sender: socket.id
+      answer: data.answer  // ✅ Передаем объект с answer
     });
   });
 
   socket.on('ice-candidate', (data) => {
     console.log('❄️ Forwarding ICE candidate to:', data.target);
-    // ВАЖНО: передаем объект candidate правильно
     socket.to(data.target).emit('ice-candidate', {
-      type: 'candidate',
-      candidate: data.candidate ? {
-        candidate: data.candidate.candidate,
-        sdpMid: data.candidate.sdpMid || '',
-        sdpMLineIndex: data.candidate.sdpMLineIndex || 0,
-        usernameFragment: data.candidate.usernameFragment || null
-      } : null,
-      sender: socket.id
+      candidate: data.candidate  // ✅ Передаем объект с candidate
     });
   });
 
   socket.on('disconnect', () => {
     console.log('❌ User disconnected:', socket.id);
+    
+    // Очистка сессий
+    for (const [sessionId, session] of sessions.entries()) {
+      if (session.hostId === socket.id) {
+        sessions.delete(sessionId);
+        break;
+      }
+    }
   });
 });
 
@@ -113,5 +119,7 @@ function generateSessionId() {
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
+  console.log('=================================');
   console.log('🚀 Server running on port', PORT);
+  console.log('=================================');
 });
