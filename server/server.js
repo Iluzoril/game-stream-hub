@@ -10,8 +10,7 @@ const io = socketIo(server, {
   cors: {
     origin: "*",
     methods: ["GET", "POST"]
-  },
-  transports: ['websocket', 'polling']
+  }
 });
 
 app.use(cors());
@@ -29,14 +28,6 @@ app.get('/host', (req, res) => {
 
 app.get('/client', (req, res) => {
   res.sendFile(path.join(__dirname, '../client/client.html'));
-});
-
-app.get('/api/status', (req, res) => {
-  res.json({ 
-    status: 'OK', 
-    message: 'Server is running',
-    timestamp: new Date().toISOString()
-  });
 });
 
 // Хранилище сессий
@@ -71,15 +62,12 @@ io.on('connection', (socket) => {
     socket.join(sessionId);
     socket.emit('session-joined', { sessionId });
     
-    // Уведомляем хост
     socket.to(session.hostId).emit('client-connected', { 
       clientId: socket.id
     });
-
-    console.log('👤 Client joined session:', sessionId);
   });
 
-  // WebRTC signaling - ПРОСТАЯ передача
+  // WebRTC signaling
   socket.on('webrtc-offer', (data) => {
     socket.to(data.target).emit('webrtc-offer', data.offer);
   });
@@ -94,14 +82,6 @@ io.on('connection', (socket) => {
 
   socket.on('disconnect', () => {
     console.log('❌ User disconnected:', socket.id);
-    
-    // Очистка сессий
-    for (const [sessionId, session] of sessions.entries()) {
-      if (session.hostId === socket.id) {
-        sessions.delete(sessionId);
-        break;
-      }
-    }
   });
 });
 
@@ -111,7 +91,5 @@ function generateSessionId() {
 
 const PORT = process.env.PORT || 3000;
 server.listen(PORT, () => {
-  console.log('=================================');
   console.log('🚀 Server running on port', PORT);
-  console.log('=================================');
 });
