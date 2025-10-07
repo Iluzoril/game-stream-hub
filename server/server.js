@@ -1,4 +1,3 @@
-const isProduction = process.env.NODE_ENV === 'production';
 const express = require('express');
 const http = require('http');
 const socketIo = require('socket.io');
@@ -21,27 +20,23 @@ function getLocalIP() {
 
 const localIP = getLocalIP();
 const PORT = process.env.PORT || 3000;
+const isProduction = process.env.NODE_ENV === 'production';
 
 const app = express();
 const server = http.createServer(app);
+
+// Важные настройки для Socket.IO
 const io = socketIo(server, {
   cors: {
-    origin: isProduction ? [
-      "https://your-app-name.onrender.com",
-      "http://your-app-name.onrender.com"
-    ] : "*",
-    methods: ["GET", "POST"],
-    credentials: true
-  }
+    origin: "*",
+    methods: ["GET", "POST"]
+  },
+  transports: ['websocket', 'polling'] // Важно для WebRTC
 });
 
 app.use(cors());
 app.use(express.json());
-app.use(express.static(path.join(__dirname, '../client'), {
-  maxAge: isProduction ? '1d' : '0',
-  etag: true,
-  lastModified: true
-}));
+app.use(express.static(path.join(__dirname, '../client')));
 
 // Маршруты
 app.get('/', (req, res) => {
@@ -76,22 +71,15 @@ app.get('/api/status', (req, res) => {
     ip: localIP,
     port: PORT,
     timestamp: new Date().toISOString(),
-    sessions: sessions ? sessions.size : 0
+    sessions: sessions.size
   });
 });
-
-app.get('*', (req, res) => {
-  if (!req.path.startsWith('/api') && !req.path.startsWith('/socket.io')) {
-    res.sendFile(path.join(__dirname, '../client/index.html'));
-  }
-});
-
 
 // Хранилище сессий
 const sessions = new Map();
 
 io.on('connection', (socket) => {
-  console.log('User connected:', socket.id);
+  console.log('✅ User connected:', socket.id);
 
   // Создание сессии для хоста
   socket.on('create-session', (data) => {
@@ -99,7 +87,7 @@ io.on('connection', (socket) => {
     sessions.set(sessionId, {
       hostId: socket.id,
       clients: new Set(),
-      game: data.game || 'Unknown Game',
+      game: data.game || 'Desktop Stream',
       createdAt: new Date()
     });
 
@@ -108,7 +96,7 @@ io.on('connection', (socket) => {
       sessionId,
       connectionUrl: `http://${localIP}:${PORT}/client`
     });
-    console.log(`Session created: ${sessionId} by ${socket.id}`);
+    console.log(`🎮 Session created: ${sessionId} by ${socket.id}`);
   });
 
   // Подключение клиента к сессии
@@ -116,13 +104,16 @@ io.on('connection', (socket) => {
     const session = sessions.get(sessionId);
     
     if (!session) {
-      socket.emit('session-error', { message: 'Сессия не найдена' });
+      socket.emit('session-error', { message: 'Сессия не найдена. Проверьте ID.' });
       return;
     }
 
     session.clients.add(socket.id);
     socket.join(sessionId);
-    socket.emit('session-joined', { sessionId });
+    socket.emit('session-joined', { 
+      sessionId,
+      hostId: session.hostId 
+    });
     
     // Уведомляем хост о новом клиенте
     socket.to(session.hostId).emit('client-connected', { 
@@ -130,11 +121,12 @@ io.on('connection', (socket) => {
       totalClients: session.clients.size
     });
 
-    console.log(`Client ${socket.id} joined session ${sessionId}`);
+    console.log(`🔗 Client ${socket.id} joined session ${sessionId}`);
   });
 
-  // WebRTC signaling
+  // WebRTC signaling - ОЧЕНЬ ВАЖНО!
   socket.on('webrtc-offer', (data) => {
+    console.log('📨 Offer from:', data.sender, 'to:', data.target);
     socket.to(data.target).emit('webrtc-offer', {
       offer: data.offer,
       sender: socket.id
@@ -142,6 +134,7 @@ io.on('connection', (socket) => {
   });
 
   socket.on('webrtc-answer', (data) => {
+    console.log('📨 Answer from:', data.sender, 'to:', data.target);
     socket.to(data.target).emit('webrtc-answer', {
       answer: data.answer,
       sender: socket.id
@@ -163,22 +156,14 @@ io.on('connection', (socket) => {
     }
   });
 
-  // Получение информации о сессии
-  socket.on('get-session-info', (sessionId) => {
-    const session = sessions.get(sessionId);
-    if (session) {
-      socket.emit('session-info', {
-        sessionId: sessionId,
-        clientsCount: session.clients.size,
-        game: session.game,
-        createdAt: session.createdAt
-      });
-    }
+  // Пинг-понг для проверки соединения
+  socket.on('ping', (timestamp) => {
+    socket.emit('pong', timestamp);
   });
 
   // Отслеживание отключений
-  socket.on('disconnect', () => {
-    console.log('User disconnected:', socket.id);
+  socket.on('disconnect', (reason) => {
+    console.log('❌ User disconnected:', socket.id, 'Reason:', reason);
     
     // Удаляем клиента из сессий
     for (const [sessionId, session] of sessions.entries()) {
@@ -186,7 +171,7 @@ io.on('connection', (socket) => {
         // Хост отключился - закрываем сессию
         io.to(sessionId).emit('session-ended', { reason: 'Хост отключился' });
         sessions.delete(sessionId);
-        console.log(`Session ${sessionId} ended (host disconnected)`);
+        console.log(`🗑️ Session ${sessionId} ended (host disconnected)`);
         break;
       }
       
@@ -197,6 +182,7 @@ io.on('connection', (socket) => {
           clientId: socket.id,
           totalClients: session.clients.size
         });
+        console.log(`👋 Client ${socket.id} left session ${sessionId}`);
       }
     }
   });
@@ -215,15 +201,6 @@ function generateSessionId() {
   return Math.random().toString(36).substring(2, 8).toUpperCase();
 }
 
-// Обработка ошибок
-process.on('uncaughtException', (error) => {
-  console.error('Uncaught Exception:', error);
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
-});
-
 // Запуск сервера
 server.listen(PORT, () => {
   console.log(`=================================`);
@@ -231,8 +208,5 @@ server.listen(PORT, () => {
   console.log(`📍 Local:  http://localhost:${PORT}`);
   console.log(`📍 Network: http://${localIP}:${PORT}`);
   console.log(`🔧 API Status: http://${localIP}:${PORT}/api/status`);
-  console.log(`=================================`);
-  console.log(`📢 Для подключения с других устройств:`);
-  console.log(`   http://${localIP}:${PORT}`);
   console.log(`=================================`);
 });
