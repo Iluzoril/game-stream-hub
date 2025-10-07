@@ -5,7 +5,6 @@ class HostController {
         this.localStream = null;
         this.peerConnection = null;
         
-        // ОЧЕНЬ ПРОСТАЯ конфигурация WebRTC
         this.configuration = {
             iceServers: [
                 { urls: 'stun:stun.l.google.com:19302' }
@@ -47,16 +46,14 @@ class HostController {
             this.createPeerConnection(data.clientId);
         });
 
-        this.socket.on('webrtc-answer', async (answer) => {
-            if (this.peerConnection) {
-                await this.peerConnection.setRemoteDescription(answer);
-            }
+        this.socket.on('webrtc-answer', async (data) => {
+            console.log('📨 Received answer from client');
+            await this.handleAnswer(data.answer);
         });
 
-        this.socket.on('ice-candidate', (candidate) => {
-            if (this.peerConnection && candidate) {
-                this.peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
-            }
+        this.socket.on('ice-candidate', (data) => {
+            console.log('❄️ Received ICE candidate from client');
+            this.handleIceCandidate(data.candidate);
         });
     }
 
@@ -64,18 +61,15 @@ class HostController {
         try {
             this.updateStatus('Requesting screen access...', 'waiting');
             
-            // ПРОСТОЙ захват экрана
             this.localStream = await navigator.mediaDevices.getDisplayMedia({
                 video: true,
-                audio: false // Отключаем аудио для простоты
+                audio: false
             });
 
             console.log('🎥 Screen capture started');
 
-            // Показываем локальное видео
             this.localVideo.srcObject = this.localStream;
             
-            // Создаем сессию
             this.socket.emit('create-session', {});
             this.updateStatus('Screen sharing active', 'connected');
 
@@ -92,7 +86,7 @@ class HostController {
             
             this.peerConnection = new RTCPeerConnection(this.configuration);
 
-            // Добавляем ВСЕ треки
+            // Добавляем треки
             this.localStream.getTracks().forEach(track => {
                 console.log('➕ Adding track:', track.kind);
                 this.peerConnection.addTrack(track, this.localStream);
@@ -101,26 +95,56 @@ class HostController {
             // ICE кандидаты
             this.peerConnection.onicecandidate = (event) => {
                 if (event.candidate) {
+                    console.log('❄️ Sending ICE candidate');
+                    // ВАЖНО: передаем правильный формат candidate
                     this.socket.emit('ice-candidate', {
                         target: clientId,
-                        candidate: event.candidate
+                        candidate: {
+                            candidate: event.candidate.candidate,
+                            sdpMid: event.candidate.sdpMid,
+                            sdpMLineIndex: event.candidate.sdpMLineIndex,
+                            usernameFragment: event.candidate.usernameFragment
+                        }
                     });
                 }
             };
 
-            // Создаем offer с базовыми настройками
+            // Создаем offer
             const offer = await this.peerConnection.createOffer();
             await this.peerConnection.setLocalDescription(offer);
+            
+            console.log('📨 Sending offer to client:', offer.type);
             
             this.socket.emit('webrtc-offer', {
                 target: clientId,
                 offer: offer
             });
 
-            console.log('✅ Offer sent to client');
-
         } catch (error) {
             console.error('❌ Peer connection error:', error);
+        }
+    }
+
+    async handleAnswer(answer) {
+        try {
+            if (this.peerConnection && answer) {
+                console.log('✅ Processing answer from client');
+                await this.peerConnection.setRemoteDescription(answer);
+                console.log('✅ Remote description set successfully');
+            }
+        } catch (error) {
+            console.error('❌ Error handling answer:', error);
+        }
+    }
+
+    handleIceCandidate(candidate) {
+        try {
+            if (this.peerConnection && candidate) {
+                console.log('✅ Adding ICE candidate from client');
+                this.peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+            }
+        } catch (error) {
+            console.error('❌ Error adding ICE candidate:', error);
         }
     }
 
