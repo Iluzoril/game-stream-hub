@@ -78,7 +78,7 @@ io.on('connection', (socket) => {
     console.log('👤 Client joined session:', sessionId);
   });
 
-  // WebRTC signaling - ПРАВИЛЬНАЯ передача
+  // WebRTC signaling
   socket.on('webrtc-offer', (data) => {
     console.log('📨 Forwarding offer to:', data.target);
     socket.to(data.target).emit('webrtc-offer', {
