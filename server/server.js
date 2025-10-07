@@ -38,6 +38,15 @@ app.get('/api/status', (req, res) => {
   });
 });
 
+app.get('/api/server-info', (req, res) => {
+  res.json({
+    status: 'OK',
+    message: 'GameStream Hub Server',
+    url: 'https://game-stream-hub.onrender.com',
+    timestamp: new Date().toISOString()
+  });
+});
+
 // Хранилище сессий
 const sessions = new Map();
 
