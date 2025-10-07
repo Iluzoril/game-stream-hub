@@ -78,25 +78,25 @@ io.on('connection', (socket) => {
     console.log('👤 Client joined session:', sessionId);
   });
 
-  // WebRTC signaling - ПРАВИЛЬНАЯ передача
+  // WebRTC signaling
   socket.on('webrtc-offer', (data) => {
     console.log('📨 Forwarding offer to:', data.target);
     socket.to(data.target).emit('webrtc-offer', {
-      offer: data.offer  // ✅ Передаем объект с offer
+      offer: data.offer
     });
   });
 
   socket.on('webrtc-answer', (data) => {
     console.log('📨 Forwarding answer to:', data.target);
     socket.to(data.target).emit('webrtc-answer', {
-      answer: data.answer  // ✅ Передаем объект с answer
+      answer: data.answer
     });
   });
 
   socket.on('ice-candidate', (data) => {
     console.log('❄️ Forwarding ICE candidate to:', data.target);
     socket.to(data.target).emit('ice-candidate', {
-      candidate: data.candidate  // ✅ Передаем объект с candidate
+      candidate: data.candidate
     });
   });
 
@@ -107,6 +107,7 @@ io.on('connection', (socket) => {
     for (const [sessionId, session] of sessions.entries()) {
       if (session.hostId === socket.id) {
         sessions.delete(sessionId);
+        console.log('🗑️ Session deleted:', sessionId);
         break;
       }
     }
