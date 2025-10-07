@@ -38,15 +38,6 @@ app.get('/api/status', (req, res) => {
   });
 });
 
-app.get('/api/server-info', (req, res) => {
-  res.json({
-    status: 'OK',
-    message: 'GameStream Hub Server',
-    url: 'https://game-stream-hub.onrender.com',
-    timestamp: new Date().toISOString()
-  });
-});
-
 // Хранилище сессий
 const sessions = new Map();
 
@@ -87,7 +78,7 @@ io.on('connection', (socket) => {
     console.log('👤 Client joined session:', sessionId);
   });
 
-  // WebRTC signaling
+  // WebRTC signaling - ПРАВИЛЬНАЯ передача
   socket.on('webrtc-offer', (data) => {
     console.log('📨 Forwarding offer to:', data.target);
     socket.to(data.target).emit('webrtc-offer', {
@@ -115,9 +106,20 @@ io.on('connection', (socket) => {
     // Очистка сессий
     for (const [sessionId, session] of sessions.entries()) {
       if (session.hostId === socket.id) {
+        // Уведомляем клиентов о отключении хоста
+        socket.to(sessionId).emit('host-disconnected');
         sessions.delete(sessionId);
         console.log('🗑️ Session deleted:', sessionId);
         break;
+      }
+      
+      if (session.clients.has(socket.id)) {
+        // Удаляем клиента
+        session.clients.delete(socket.id);
+        socket.to(session.hostId).emit('client-disconnected', {
+          clientId: socket.id
+        });
+        console.log('👋 Client removed from session:', sessionId);
       }
     }
   });
