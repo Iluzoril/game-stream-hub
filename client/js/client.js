@@ -3,30 +3,15 @@ class ClientController {
         this.socket = io();
         this.peerConnection = null;
         
-        // УЛУЧШЕННАЯ конфигурация WebRTC
         this.configuration = {
             iceServers: [
-                { urls: 'stun:stun.l.google.com:19302' },
-                { urls: 'stun:stun1.l.google.com:19302' },
-                { urls: 'stun:stun2.l.google.com:19302' },
-                {
-                    urls: 'turn:openrelay.metered.ca:80',
-                    username: 'openrelayproject',
-                    credential: 'openrelayproject'
-                },
-                {
-                    urls: 'turn:openrelay.metered.ca:443',
-                    username: 'openrelayproject',
-                    credential: 'openrelayproject'
-                }
-            ],
-            iceTransportPolicy: 'all',
-            bundlePolicy: 'max-bundle',
-            rtcpMuxPolicy: 'require'
+                { urls: 'stun:stun.l.google.com:19302' }
+            ]
         };
 
         this.initializeElements();
         this.initializeSocketListeners();
+        this.initializeVideoHandling();
     }
 
     initializeElements() {
@@ -55,7 +40,7 @@ class ClientController {
 
         this.socket.on('session-joined', () => {
             this.showGameScreen();
-            this.updateStatus('Waiting for video stream...');
+            this.updateStatus('Connecting to host...');
         });
 
         this.socket.on('session-error', (data) => {
@@ -73,7 +58,31 @@ class ClientController {
         });
 
         this.socket.on('ice-candidate', (candidate) => {
-            this.handleIceCandidate(candidate);
+            if (this.peerConnection && candidate) {
+                this.peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+            }
+        });
+    }
+
+    initializeVideoHandling() {
+        // Настройка видео элемента для лучшей совместимости
+        this.remoteVideo.playsInline = true;
+        this.remoteVideo.muted = true; // Важно для автовоспроизведения
+        this.remoteVideo.setAttribute('playsinline', 'true');
+        
+        // Обработчики событий видео
+        this.remoteVideo.addEventListener('loadeddata', () => {
+            console.log('✅ Video data loaded');
+        });
+        
+        this.remoteVideo.addEventListener('canplay', () => {
+            console.log('▶️ Video can play');
+            this.loadingMessage.style.display = 'none';
+        });
+        
+        this.remoteVideo.addEventListener('error', (e) => {
+            console.error('❌ Video error:', e);
+            this.showError('Video playback error');
         });
     }
 
@@ -88,7 +97,6 @@ class ClientController {
         this.hideError();
         this.connectBtn.disabled = true;
         this.connectBtn.textContent = 'Connecting...';
-        this.updateStatus('Connecting to session...');
 
         this.socket.emit('join-session', sessionId);
         
@@ -109,11 +117,14 @@ class ClientController {
         this.connectScreen.classList.remove('hidden');
         this.connectBtn.disabled = false;
         this.connectBtn.textContent = 'Connect';
+        this.remoteVideo.srcObject = null;
     }
 
     showError(message) {
         this.errorMessage.textContent = message;
         this.errorMessage.style.display = 'block';
+        this.connectBtn.disabled = false;
+        this.connectBtn.textContent = 'Connect';
     }
 
     hideError() {
@@ -128,30 +139,24 @@ class ClientController {
 
     async handleOffer(offer) {
         try {
-            console.log('📨 Received WebRTC offer');
+            console.log('📨 Handling WebRTC offer');
             
             this.peerConnection = new RTCPeerConnection(this.configuration);
 
-            // ВАЖНО: Обработчик входящего видеопотока
+            // ВАЖНО: Правильная обработка видеопотока
             this.peerConnection.ontrack = (event) => {
-                console.log('🎬 Received track event:', event);
+                console.log('🎬 Track event received:', event);
                 
                 if (event.streams && event.streams[0]) {
                     const stream = event.streams[0];
-                    console.log('📹 Stream received with tracks:', stream.getTracks().length);
+                    console.log('📹 Stream received with', stream.getTracks().length, 'tracks');
                     
+                    // Устанавливаем поток в видео элемент
                     this.remoteVideo.srcObject = stream;
-                    this.loadingMessage.style.display = 'none';
-                    this.updateStatus('Connected! Video streaming...');
+                    this.updateStatus('Video connected! Starting playback...');
                     
-                    // Автовоспроизведение с обработкой ошибок
-                    this.remoteVideo.play().then(() => {
-                        console.log('✅ Video playback started');
-                    }).catch(error => {
-                        console.log('⚠️ Video play error:', error);
-                        // Показываем кнопку для ручного запуска
-                        this.remoteVideo.controls = true;
-                    });
+                    // Пытаемся воспроизвести видео
+                    this.playVideoWithRetry();
                 }
             };
 
@@ -165,26 +170,7 @@ class ClientController {
                 }
             };
 
-            // Отслеживание состояния
-            this.peerConnection.onconnectionstatechange = () => {
-                console.log('🔗 WebRTC state:', this.peerConnection.connectionState);
-                switch(this.peerConnection.connectionState) {
-                    case 'connected':
-                        this.updateStatus('Video connected!');
-                        break;
-                    case 'disconnected':
-                    case 'failed':
-                        this.updateStatus('Connection lost');
-                        this.showError('Video connection lost');
-                        break;
-                }
-            };
-
-            this.peerConnection.oniceconnectionstatechange = () => {
-                console.log('❄️ ICE state:', this.peerConnection.iceConnectionState);
-            };
-
-            // Устанавливаем offer и создаем answer
+            // Устанавливаем offer
             await this.peerConnection.setRemoteDescription(offer);
             const answer = await this.peerConnection.createAnswer();
             await this.peerConnection.setLocalDescription(answer);
@@ -198,26 +184,46 @@ class ClientController {
 
         } catch (error) {
             console.error('❌ WebRTC error:', error);
-            this.showError('Connection failed: ' + error.message);
+            this.showError('Connection failed');
+        }
+    }
+
+    async playVideoWithRetry() {
+        try {
+            // Ждем немного перед воспроизведением
+            await new Promise(resolve => setTimeout(resolve, 1000));
+            
+            // Пытаемся воспроизвести
+            await this.remoteVideo.play();
+            console.log('✅ Video playback started successfully');
+            this.loadingMessage.style.display = 'none';
+            this.updateStatus('Streaming!');
+            
+        } catch (playError) {
+            console.log('⚠️ Auto-play failed, trying with user gesture...');
+            
+            // Показываем сообщение для пользователя
+            this.loadingMessage.innerHTML = 'Click to start video playback';
+            this.loadingMessage.style.cursor = 'pointer';
+            this.loadingMessage.onclick = () => {
+                this.remoteVideo.play().then(() => {
+                    this.loadingMessage.style.display = 'none';
+                }).catch(e => {
+                    console.error('❌ Manual play also failed:', e);
+                });
+            };
         }
     }
 
     handleIceCandidate(candidate) {
-        try {
-            if (this.peerConnection && candidate) {
-                this.peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
-            }
-        } catch (error) {
-            console.error('❌ ICE candidate error:', error);
+        if (this.peerConnection && candidate) {
+            this.peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
         }
     }
 
     disconnect() {
         if (this.peerConnection) {
             this.peerConnection.close();
-        }
-        if (this.remoteVideo.srcObject) {
-            this.remoteVideo.srcObject = null;
         }
         this.showConnectScreen();
     }
