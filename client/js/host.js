@@ -1,15 +1,45 @@
 class HostController {
     constructor() {
-        this.socket = io();
+        this.socket = io({
+            transports: ['websocket', 'polling'],
+            reconnection: true,
+            reconnectionAttempts: 10,
+            reconnectionDelay: 1000
+        });
+        
         this.sessionId = null;
         this.localStream = null;
         this.peerConnections = new Map();
+        
+        // УЛУЧШЕННАЯ конфигурация WebRTC
         this.configuration = {
             iceServers: [
                 { urls: 'stun:stun.l.google.com:19302' },
-                { urls: 'stun:stun1.l.google.com:19302' }
-            ]
+                { urls: 'stun:stun1.l.google.com:19302' },
+                { urls: 'stun:stun2.l.google.com:19302' },
+                { urls: 'stun:stun3.l.google.com:19302' },
+                // Бесплатные TURN серверы для обхода NAT
+                {
+                    urls: 'turn:openrelay.metered.ca:80',
+                    username: 'openrelayproject',
+                    credential: 'openrelayproject'
+                },
+                {
+                    urls: 'turn:openrelay.metered.ca:443', 
+                    username: 'openrelayproject',
+                    credential: 'openrelayproject'
+                },
+                {
+                    urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+                    username: 'openrelayproject',
+                    credential: 'openrelayproject'
+                }
+            ],
+            iceCandidatePoolSize: 10,
+            bundlePolicy: 'max-bundle',
+            rtcpMuxPolicy: 'require'
         };
+
         this.serverInfo = null;
 
         this.initializeElements();
@@ -75,7 +105,7 @@ class HostController {
 
     initializeSocketListeners() {
         this.socket.on('connect', () => {
-            console.log('Connected to server as host');
+            console.log('✅ Connected to server as host');
             this.updateStatus('Подключено к серверу', 'connected');
         });
 
@@ -123,7 +153,7 @@ class HostController {
         });
 
         this.socket.on('client-input', (data) => {
-            console.log('Input received from client:', data);
+            console.log('🎮 Input received from client:', data);
             // Здесь можно добавить обработку ввода от клиента
             // Например, эмуляцию нажатий клавиш на хосте
         });
@@ -147,107 +177,142 @@ class HostController {
 
     async startHosting() {
         try {
-            this.updateStatus('Запуск трансляции...', 'waiting');
+            this.updateStatus('Запрос доступа к экрану...', 'waiting');
             
-            // Запрос доступа к экрану
+            // УЛУЧШЕННЫЙ запрос доступа к экрану
             this.localStream = await navigator.mediaDevices.getDisplayMedia({
                 video: {
                     cursor: 'always',
+                    displaySurface: 'monitor',
                     frameRate: { ideal: 30, max: 60 },
-                    width: { ideal: 1920, max: 1920 },
-                    height: { ideal: 1080, max: 1080 }
+                    width: { ideal: 1280, max: 1920 },
+                    height: { ideal: 720, max: 1080 }
                 },
                 audio: {
                     echoCancellation: true,
                     noiseSuppression: true,
-                    sampleRate: 44100
-                }
+                    sampleRate: 44100,
+                    channelCount: 2
+                },
+                selfBrowserSurface: "exclude",
+                systemAudio: "include",
+                surfaceSwitching: "include"
             });
 
+            console.log('🎥 Screen capture started:', this.localStream);
+
             // Обработчик остановки трансляции пользователем
-            this.localStream.getTracks().forEach(track => {
-                track.onended = () => {
-                    this.stopHosting();
-                };
-            });
+            this.localStream.getVideoTracks()[0].onended = () => {
+                console.log('🛑 User stopped screen sharing');
+                this.stopHosting();
+            };
 
             this.localVideo.srcObject = this.localStream;
             this.streamStatusElement.textContent = 'Активен';
             
-            // Создание сессии на сервере
-            this.socket.emit('create-session', {
-                game: 'Desktop Stream',
-                resolution: '1920x1080',
-                fps: 30
-            });
-
-            this.updateStatus('Трансляция запущена', 'connected');
+            // Ждем немного перед созданием сессии
+            setTimeout(() => {
+                // Создание сессии на сервера
+                this.socket.emit('create-session', {
+                    game: 'Desktop Stream',
+                    resolution: '1280x720',
+                    fps: 30
+                });
+                this.updateStatus('Сессия создается...', 'waiting');
+            }, 1000);
 
         } catch (error) {
-            console.error('Error starting hosting:', error);
+            console.error('❌ Error starting hosting:', error);
             this.updateStatus('Ошибка запуска трансляции', 'error');
             
             if (error.name === 'NotAllowedError') {
-                alert('Доступ к экрану запрещен. Разрешите доступ в настройках браузера.');
+                alert('❌ Доступ к экрану запрещен. Разрешите доступ в настройках браузера.');
             } else if (error.name === 'NotFoundError') {
-                alert('Не найдено доступных источников для захвата экрана.');
+                alert('❌ Не найдено доступных источников для захвата экрана.');
+            } else if (error.name === 'NotSupportedError') {
+                alert('❌ Ваш браузер не поддерживает захват экрана.');
             } else {
-                alert('Не удалось начать трансляцию: ' + error.message);
+                alert('❌ Не удалось начать трансляцию: ' + error.message);
             }
         }
     }
 
     async createPeerConnection(clientId) {
         try {
+            console.log(`🔗 Creating peer connection for client: ${clientId}`);
+            
             const peerConnection = new RTCPeerConnection(this.configuration);
 
             // Добавляем все треки из локального стрима
             this.localStream.getTracks().forEach(track => {
+                console.log(`🎯 Adding track: ${track.kind}`, track);
                 peerConnection.addTrack(track, this.localStream);
             });
 
-            // Обработка ICE кандидатов
+            // УЛУЧШЕННАЯ обработка ICE кандидатов
             peerConnection.onicecandidate = (event) => {
                 if (event.candidate) {
+                    console.log('❄️ Sending ICE candidate to:', clientId);
                     this.socket.emit('ice-candidate', {
                         target: clientId,
                         candidate: event.candidate
                     });
+                } else {
+                    console.log('✅ All ICE candidates gathered');
                 }
             };
 
             peerConnection.onconnectionstatechange = () => {
-                console.log(`Connection state with ${clientId}:`, peerConnection.connectionState);
+                const state = peerConnection.connectionState;
+                console.log(`🔗 Connection state with ${clientId}: ${state}`);
                 
-                if (peerConnection.connectionState === 'connected') {
-                    this.updateStatus('Соединение установлено', 'connected');
-                } else if (peerConnection.connectionState === 'disconnected') {
-                    this.updateStatus('Соединение прервано', 'waiting');
+                switch(state) {
+                    case 'connected':
+                        this.updateStatus('Соединение установлено!', 'connected');
+                        break;
+                    case 'disconnected':
+                        this.updateStatus('Соединение прервано', 'waiting');
+                        break;
+                    case 'failed':
+                        this.updateStatus('Ошибка соединения', 'error');
+                        console.error('❌ WebRTC connection failed');
+                        break;
+                    case 'closed':
+                        console.log('🔒 WebRTC connection closed');
+                        break;
                 }
             };
 
-            peerConnection.ontrack = (event) => {
-                console.log('Received track from client:', event);
+            peerConnection.onsignalingstatechange = () => {
+                console.log(`📡 Signaling state: ${peerConnection.signalingState}`);
             };
 
-            // Создание offer
+            peerConnection.oniceconnectionstatechange = () => {
+                console.log(`❄️ ICE connection state: ${peerConnection.iceConnectionState}`);
+            };
+
+            // Создание offer с улучшенными настройками
             const offer = await peerConnection.createOffer({
-                offerToReceiveAudio: true,
-                offerToReceiveVideo: false
+                offerToReceiveAudio: false,
+                offerToReceiveVideo: false,
+                iceRestart: false
             });
             
             await peerConnection.setLocalDescription(offer);
+            console.log('📨 Created offer:', offer.type);
 
             this.socket.emit('webrtc-offer', {
                 target: clientId,
-                offer: offer
+                offer: offer,
+                sender: this.socket.id
             });
 
             this.peerConnections.set(clientId, peerConnection);
-            console.log(`Peer connection created for client: ${clientId}`);
+            console.log(`✅ Peer connection created for client: ${clientId}`);
 
         } catch (error) {
-            console.error('Error creating peer connection:', error);
+            console.error('❌ Error creating peer connection:', error);
+            this.updateStatus('Ошибка создания соединения', 'error');
         }
     }
 
@@ -379,6 +444,8 @@ class HostController {
     }
 
     stopHosting() {
+        console.log('🛑 Stopping hosting...');
+        
         // Останавливаем все треки
         if (this.localStream) {
             this.localStream.getTracks().forEach(track => {
