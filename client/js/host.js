@@ -5,10 +5,16 @@ class HostController {
         this.localStream = null;
         this.peerConnection = null;
         
+        // УЛУЧШЕННАЯ конфигурация WebRTC
         this.configuration = {
             iceServers: [
-                { urls: 'stun:stun.l.google.com:19302' }
-            ]
+                { urls: 'stun:stun.l.google.com:19302' },
+                { urls: 'stun:stun1.l.google.com:19302' },
+                { urls: 'stun:stun2.l.google.com:19302' }
+            ],
+            iceTransportPolicy: 'all',
+            bundlePolicy: 'max-bundle',
+            rtcpMuxPolicy: 'require'
         };
 
         this.initializeElements();
@@ -32,6 +38,7 @@ class HostController {
 
     initializeSocketListeners() {
         this.socket.on('connect', () => {
+            console.log('✅ Connected to server');
             this.updateStatus('Connected to server', 'waiting');
         });
 
@@ -39,20 +46,24 @@ class HostController {
             this.sessionId = data.sessionId;
             this.sessionIdElement.textContent = this.sessionId;
             this.updateStatus('Waiting for client...', 'waiting');
+            console.log('✅ Session created with ID:', this.sessionId);
         });
 
         this.socket.on('client-connected', (data) => {
-            this.updateStatus('Client connected!', 'connected');
+            console.log('✅ Client connected:', data.clientId);
+            this.updateStatus('Client connected! Starting stream...', 'connected');
             this.connectedClientsElement.textContent = '1/1';
             this.createPeerConnection(data.clientId);
         });
 
-        this.socket.on('webrtc-answer', async (answer) => {
-            await this.handleAnswer(answer);
+        this.socket.on('webrtc-answer', async (data) => {
+            console.log('📨 Received WebRTC answer from client');
+            await this.handleAnswer(data.answer);
         });
 
-        this.socket.on('ice-candidate', (candidate) => {
-            this.handleIceCandidate(candidate);
+        this.socket.on('ice-candidate', (data) => {
+            console.log('❄️ Received ICE candidate from client');
+            this.handleIceCandidate(data.candidate);
         });
     }
 
@@ -60,22 +71,36 @@ class HostController {
         try {
             this.updateStatus('Requesting screen access...', 'waiting');
             
+            // Захват экрана с улучшенными настройками
             this.localStream = await navigator.mediaDevices.getDisplayMedia({
-                video: true,
-                audio: false
+                video: {
+                    cursor: 'always',
+                    frameRate: { ideal: 30 },
+                    width: { ideal: 1280 },
+                    height: { ideal: 720 }
+                },
+                audio: false // Упрощаем - только видео
             });
 
-            console.log('🎥 Screen capture started');
+            console.log('🎥 Screen capture started. Tracks:', this.localStream.getTracks().length);
 
+            // Показываем локальное видео
             this.localVideo.srcObject = this.localStream;
             
+            // Обработчик остановки трансляции
+            this.localStream.getVideoTracks()[0].addEventListener('ended', () => {
+                console.log('🛑 Screen sharing stopped by user');
+                this.stopHosting();
+            });
+
+            // Создаем сессию на сервере
             this.socket.emit('create-session', {});
             this.updateStatus('Screen sharing active', 'connected');
 
         } catch (error) {
             console.error('❌ Screen capture error:', error);
             this.updateStatus('Failed to start sharing', 'error');
-            alert('Error: ' + error.message);
+            alert('Error starting screen sharing: ' + error.message);
         }
     }
 
@@ -85,44 +110,66 @@ class HostController {
             
             this.peerConnection = new RTCPeerConnection(this.configuration);
 
-            // Добавляем треки
+            // ВАЖНО: Добавляем все треки в соединение
             this.localStream.getTracks().forEach(track => {
-                console.log('➕ Adding track:', track.kind);
+                console.log('➕ Adding track:', track.kind, track);
                 this.peerConnection.addTrack(track, this.localStream);
             });
 
-            // ICE кандидаты
+            // Обработчик ICE кандидатов
             this.peerConnection.onicecandidate = (event) => {
                 if (event.candidate) {
-                    console.log('❄️ Sending ICE candidate');
+                    console.log('❄️ Sending ICE candidate to client');
                     this.socket.emit('ice-candidate', {
                         target: clientId,
                         candidate: event.candidate
                     });
+                } else {
+                    console.log('✅ All ICE candidates gathered');
                 }
             };
 
             // Отслеживание состояния соединения
             this.peerConnection.onconnectionstatechange = () => {
-                console.log('🔗 Connection state:', this.peerConnection.connectionState);
-                if (this.peerConnection.connectionState === 'connected') {
-                    this.updateStatus('Streaming to client!', 'connected');
+                const state = this.peerConnection.connectionState;
+                console.log('🔗 Connection state:', state);
+                
+                switch(state) {
+                    case 'connected':
+                        this.updateStatus('Streaming to client!', 'connected');
+                        break;
+                    case 'disconnected':
+                        this.updateStatus('Connection lost', 'waiting');
+                        break;
+                    case 'failed':
+                        this.updateStatus('Connection failed', 'error');
+                        break;
                 }
             };
 
-            // Создаем offer
-            const offer = await this.peerConnection.createOffer();
+            this.peerConnection.oniceconnectionstatechange = () => {
+                console.log('❄️ ICE connection state:', this.peerConnection.iceConnectionState);
+            };
+
+            // Создаем offer с правильными настройками
+            const offer = await this.peerConnection.createOffer({
+                offerToReceiveAudio: false,
+                offerToReceiveVideo: false
+            });
+            
             await this.peerConnection.setLocalDescription(offer);
-            
-            console.log('📨 Sending offer to client');
-            
+            console.log('✅ Offer created:', offer.type);
+
             this.socket.emit('webrtc-offer', {
                 target: clientId,
                 offer: offer
             });
 
+            console.log('📨 Offer sent to client');
+
         } catch (error) {
-            console.error('❌ Peer connection error:', error);
+            console.error('❌ Error creating peer connection:', error);
+            this.updateStatus('Connection error', 'error');
         }
     }
 
@@ -151,27 +198,44 @@ class HostController {
 
     updateStatus(text, status) {
         this.statusText.textContent = text;
-        this.statusDot.className = 'status-dot ' + status;
+        this.statusDot.className = 'status-dot';
+        
+        switch (status) {
+            case 'connected':
+                this.statusDot.classList.add('connected');
+                break;
+            case 'waiting':
+                this.statusDot.classList.add('waiting');
+                break;
+            case 'error':
+                this.statusDot.classList.add('error');
+                break;
+        }
     }
 
     copySessionId() {
         if (this.sessionId) {
             navigator.clipboard.writeText(this.sessionId);
-            alert('Session ID copied!');
+            alert('Session ID copied to clipboard!');
         }
     }
 
     stopHosting() {
+        console.log('🛑 Stopping hosting...');
+        
         if (this.localStream) {
             this.localStream.getTracks().forEach(track => track.stop());
         }
+
         if (this.peerConnection) {
             this.peerConnection.close();
         }
+
         window.location.href = '/';
     }
 }
 
+// Инициализация
 document.addEventListener('DOMContentLoaded', () => {
     new HostController();
 });
