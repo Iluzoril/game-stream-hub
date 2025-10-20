@@ -15,19 +15,23 @@ const io = socketIo(server, {
 
 app.use(cors());
 app.use(express.json());
-app.use(express.static(path.join(__dirname, '../client')));
+
+// ВАЖНО: Правильные пути для статических файлов
+app.use(express.static(path.join(__dirname, 'public')));
+app.use('/css', express.static(path.join(__dirname, 'public/css')));
+app.use('/js', express.static(path.join(__dirname, 'public/js')));
 
 // Маршруты
 app.get('/', (req, res) => {
-  res.sendFile(path.join(__dirname, '../client/index.html'));
+  res.sendFile(path.join(__dirname, 'public/index.html'));
 });
 
 app.get('/host', (req, res) => {
-  res.sendFile(path.join(__dirname, '../client/host.html'));
+  res.sendFile(path.join(__dirname, 'public/host.html'));
 });
 
 app.get('/client', (req, res) => {
-  res.sendFile(path.join(__dirname, '../client/client.html'));
+  res.sendFile(path.join(__dirname, 'public/client.html'));
 });
 
 app.get('/api/status', (req, res) => {
@@ -49,7 +53,8 @@ io.on('connection', (socket) => {
     const sessionId = generateSessionId();
     sessions.set(sessionId, {
       hostId: socket.id,
-      clients: new Set()
+      clients: new Set(),
+      createdAt: new Date()
     });
 
     socket.join(sessionId);
@@ -59,10 +64,20 @@ io.on('connection', (socket) => {
 
   // Подключение клиента
   socket.on('join-session', (sessionId) => {
+    console.log('👤 Client attempting to join session:', sessionId);
+    
     const session = sessions.get(sessionId);
     
     if (!session) {
+      console.log('❌ Session not found:', sessionId);
       socket.emit('session-error', { message: 'Session not found' });
+      return;
+    }
+
+    // Проверяем, не подключен ли уже клиент
+    if (session.clients.size >= 1) {
+      console.log('❌ Session is full:', sessionId);
+      socket.emit('session-error', { message: 'Session is full' });
       return;
     }
 
@@ -72,31 +87,35 @@ io.on('connection', (socket) => {
     
     // Уведомляем хост
     socket.to(session.hostId).emit('client-connected', { 
-      clientId: socket.id
+      clientId: socket.id,
+      sessionId: sessionId
     });
 
-    console.log('👤 Client joined session:', sessionId);
+    console.log('✅ Client joined session:', sessionId, 'Client ID:', socket.id);
   });
 
   // WebRTC signaling
   socket.on('webrtc-offer', (data) => {
-    console.log('📨 Forwarding offer to:', data.target);
+    console.log('📨 Forwarding offer from', socket.id, 'to:', data.target);
     socket.to(data.target).emit('webrtc-offer', {
-      offer: data.offer
+      offer: data.offer,
+      sender: socket.id
     });
   });
 
   socket.on('webrtc-answer', (data) => {
-    console.log('📨 Forwarding answer to:', data.target);
+    console.log('📨 Forwarding answer from', socket.id, 'to:', data.target);
     socket.to(data.target).emit('webrtc-answer', {
-      answer: data.answer
+      answer: data.answer,
+      sender: socket.id
     });
   });
 
   socket.on('ice-candidate', (data) => {
-    console.log('❄️ Forwarding ICE candidate to:', data.target);
+    console.log('❄️ Forwarding ICE candidate from', socket.id, 'to:', data.target);
     socket.to(data.target).emit('ice-candidate', {
-      candidate: data.candidate
+      candidate: data.candidate,
+      sender: socket.id
     });
   });
 
@@ -130,7 +149,7 @@ function generateSessionId() {
 }
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
+server.listen(PORT, '0.0.0.0', () => {
   console.log('=================================');
   console.log('🚀 Server running on port', PORT);
   console.log('=================================');
