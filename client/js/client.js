@@ -42,8 +42,8 @@ class ClientController {
             this.updateConnectionStatus('Connected to server');
         });
 
-        this.socket.on('session-joined', () => {
-            console.log('✅ Joined session successfully');
+        this.socket.on('session-joined', (data) => {
+            console.log('✅ Joined session successfully:', data.sessionId);
             this.updateConnectionStatus('Connecting to host...');
             this.showGameScreen();
         });
@@ -52,6 +52,8 @@ class ClientController {
             console.error('❌ Session error:', data.message);
             this.showError(data.message);
             this.updateConnectionStatus('Connection failed');
+            this.connectBtn.disabled = false;
+            this.connectBtn.textContent = 'Connect';
         });
 
         this.socket.on('host-disconnected', () => {
@@ -65,33 +67,46 @@ class ClientController {
             await this.handleOffer(data.offer);
         });
 
-        this.socket.on('webrtc-answer', async (data) => {
-            console.log('📨 Received WebRTC answer from host');
-            await this.handleAnswer(data.answer);
-        });
-
         this.socket.on('ice-candidate', (data) => {
             console.log('❄️ Received ICE candidate from host');
             this.handleIceCandidate(data.candidate);
+        });
+
+        this.socket.on('disconnect', () => {
+            console.log('❌ Disconnected from server');
+            this.updateConnectionStatus('Disconnected');
         });
     }
 
     initializeVideoHandling() {
         // Настройка видео элемента
         this.remoteVideo.playsInline = true;
-        this.remoteVideo.muted = true;
         this.remoteVideo.setAttribute('playsinline', 'true');
+        this.remoteVideo.setAttribute('webkit-playsinline', 'true');
         
         this.remoteVideo.addEventListener('loadeddata', () => {
             console.log('✅ Video data loaded');
+            this.loadingMessage.style.display = 'none';
         });
         
         this.remoteVideo.addEventListener('canplay', () => {
             console.log('▶️ Video can play');
+            this.updateConnectionStatus('Streaming!');
         });
         
         this.remoteVideo.addEventListener('error', (e) => {
             console.error('❌ Video error:', e);
+            console.error('Video error details:', this.remoteVideo.error);
+        });
+
+        this.remoteVideo.addEventListener('waiting', () => {
+            console.log('⏳ Video waiting for data');
+            this.loadingMessage.style.display = 'block';
+        });
+
+        this.remoteVideo.addEventListener('playing', () => {
+            console.log('🎬 Video playing');
+            this.loadingMessage.style.display = 'none';
         });
     }
 
@@ -103,6 +118,11 @@ class ClientController {
             return;
         }
 
+        if (sessionId.length !== 4) {
+            this.showError('Session ID must be 4 characters');
+            return;
+        }
+
         this.hideError();
         this.updateConnectionStatus('Connecting to session...');
         this.connectBtn.disabled = true;
@@ -111,9 +131,12 @@ class ClientController {
         console.log('🔗 Connecting to session:', sessionId);
         this.socket.emit('join-session', sessionId);
         
+        // Таймаут подключения
         setTimeout(() => {
             if (!this.isConnected && this.connectBtn.disabled) {
-                this.showError('Connection timeout');
+                this.showError('Connection timeout - check session ID');
+                this.connectBtn.disabled = false;
+                this.connectBtn.textContent = 'Connect';
             }
         }, 10000);
     }
@@ -121,6 +144,7 @@ class ClientController {
     showGameScreen() {
         this.connectScreen.classList.add('hidden');
         this.gameScreen.classList.remove('hidden');
+        this.loadingMessage.style.display = 'block';
     }
 
     showConnectScreen() {
@@ -129,6 +153,7 @@ class ClientController {
         this.connectBtn.disabled = false;
         this.connectBtn.textContent = 'Connect';
         this.remoteVideo.srcObject = null;
+        this.isConnected = false;
     }
 
     showError(message) {
@@ -151,34 +176,36 @@ class ClientController {
     async handleOffer(offer) {
         try {
             console.log('🔗 Handling WebRTC offer from host');
-            console.log('📝 Offer type:', offer.type);
-            console.log('📝 Offer SDP:', offer.sdp.substring(0, 200) + '...');
             
             if (!offer) {
                 throw new Error('No offer received');
             }
 
+            // Закрываем предыдущее соединение если есть
+            if (this.peerConnection) {
+                this.peerConnection.close();
+            }
+
             this.peerConnection = new RTCPeerConnection(this.configuration);
 
-            // ВАЖНО: Обработчик входящего видеопотока
+            // ВАЖНО: Правильная обработка входящего видеопотока
             this.peerConnection.ontrack = (event) => {
                 console.log('🎬 Received track event:', event);
                 console.log('📹 Streams count:', event.streams.length);
+                console.log('🎯 Track kind:', event.track.kind);
                 
                 if (event.streams && event.streams[0]) {
                     const stream = event.streams[0];
                     console.log('📹 Stream received with tracks:', stream.getTracks().length);
+                    
+                    // Отображаем все треки
                     stream.getTracks().forEach(track => {
                         console.log('🎯 Track:', track.kind, 'id:', track.id, 'readyState:', track.readyState);
                     });
                     
                     this.remoteVideo.srcObject = stream;
                     this.isConnected = true;
-                    this.updateConnectionStatus('Video connected!');
-                    
-                    // Проверяем состояние видео элемента
-                    console.log('🎥 Video element srcObject:', this.remoteVideo.srcObject);
-                    console.log('🎥 Video element readyState:', this.remoteVideo.readyState);
+                    this.updateConnectionStatus('WebRTC connected!');
                     
                     this.playVideoWithRetry();
                 }
@@ -192,15 +219,18 @@ class ClientController {
                         target: 'host',
                         candidate: event.candidate
                     });
-                } else {
-                    console.log('✅ All ICE candidates gathered');
                 }
             };
 
-            // Отслеживание состояния
+            // Отслеживание состояния соединения
             this.peerConnection.onconnectionstatechange = () => {
                 const state = this.peerConnection.connectionState;
                 console.log('🔗 WebRTC connection state:', state);
+                this.updateConnectionStatus(`WebRTC: ${state}`);
+            };
+
+            this.peerConnection.oniceconnectionstatechange = () => {
+                console.log('❄️ ICE connection state:', this.peerConnection.iceConnectionState);
             };
 
             this.peerConnection.onsignalingstatechange = () => {
@@ -214,7 +244,7 @@ class ClientController {
             
             console.log('🎯 Creating answer...');
             const answer = await this.peerConnection.createAnswer();
-            console.log('✅ Answer created, type:', answer.type);
+            console.log('✅ Answer created');
             
             await this.peerConnection.setLocalDescription(answer);
             console.log('✅ Local description set');
@@ -225,21 +255,9 @@ class ClientController {
                 answer: answer
             });
 
-            this.updateConnectionStatus('WebRTC connected!');
-
         } catch (error) {
             console.error('❌ Error handling offer:', error);
             this.showError('Connection failed: ' + error.message);
-        }
-    }
-
-    async handleAnswer(answer) {
-        try {
-            if (this.peerConnection && answer) {
-                await this.peerConnection.setRemoteDescription(answer);
-            }
-        } catch (error) {
-            console.error('❌ Error handling answer:', error);
         }
     }
 
@@ -259,17 +277,18 @@ class ClientController {
             console.log('🎥 Video srcObject:', this.remoteVideo.srcObject);
             console.log('🎥 Video tracks:', this.remoteVideo.srcObject?.getTracks().length);
             
-            await this.remoteVideo.play();
-            console.log('✅ Video playback started successfully');
-            this.loadingMessage.style.display = 'none';
-            this.updateConnectionStatus('Streaming!');
+            if (this.remoteVideo.srcObject) {
+                await this.remoteVideo.play();
+                console.log('✅ Video playback started successfully');
+                this.loadingMessage.style.display = 'none';
+                this.updateConnectionStatus('Streaming!');
+            }
         } catch (playError) {
             console.log('⚠️ Auto-play failed:', playError);
-            console.log('🎥 Video error details:', this.remoteVideo.error);
             
-            this.loadingMessage.innerHTML = 'Click to start video (autoplay blocked)';
+            this.loadingMessage.innerHTML = 'Click to start video<br><small>Autoplay blocked by browser</small>';
             this.loadingMessage.style.cursor = 'pointer';
-            this.loadingMessage.style.background = 'rgba(255, 152, 0, 0.8)';
+            this.loadingMessage.style.background = 'rgba(255, 152, 0, 0.9)';
             this.loadingMessage.onclick = () => {
                 console.log('🎬 Manual play attempt...');
                 this.remoteVideo.play().then(() => {
@@ -277,16 +296,18 @@ class ClientController {
                     this.loadingMessage.style.display = 'none';
                 }).catch(e => {
                     console.error('❌ Manual play failed:', e);
-                    this.loadingMessage.innerHTML = 'Playback failed. Check browser permissions.';
+                    this.loadingMessage.innerHTML = 'Playback failed<br><small>Check browser permissions</small>';
                 });
             };
         }
     }
 
     disconnect() {
+        console.log('🛑 Disconnecting...');
         this.isConnected = false;
         if (this.peerConnection) {
             this.peerConnection.close();
+            this.peerConnection = null;
         }
         this.showConnectScreen();
     }
